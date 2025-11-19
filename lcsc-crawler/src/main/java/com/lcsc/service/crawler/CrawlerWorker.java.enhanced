@@ -1,0 +1,587 @@
+package com.lcsc.service.crawler;
+
+import com.lcsc.entity.TaskLog;
+import com.lcsc.service.TaskLogService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * 爬虫工作者
+ * 负责从Redis队列获取任务并执行具体的爬取逻辑
+ *
+ * @author lcsc-crawler
+ * @since 2025-09-03
+ */
+@Component
+public class CrawlerWorker {
+
+    @Autowired
+    private RedisQueueService queueService;
+
+    @Autowired
+    private LcscApiService apiService;
+
+    @Autowired
+    private ProductDataProcessor dataProcessor;
+
+    @Autowired
+    private TaskLogService taskLogService;
+
+    private ExecutorService workerExecutor;
+    private final AtomicBoolean isRunning = new AtomicBoolean(false);
+    private final AtomicBoolean shouldStop = new AtomicBoolean(false);
+    
+    private final AtomicLong totalTasksProcessed = new AtomicLong(0);
+    private final AtomicLong totalTasksFailed = new AtomicLong(0);
+    private final AtomicInteger activeWorkers = new AtomicInteger(0);
+    private final AtomicLong totalProcessingTime = new AtomicLong(0);
+
+    /**
+     * 启动爬虫工作者
+     */
+    public void start() {
+        if (isRunning.compareAndSet(false, true)) {
+            shouldStop.set(false);
+            // 创建新的线程池
+            workerExecutor = Executors.newFixedThreadPool(3);
+            System.out.println("启动爬虫工作者，线程数: 3");
+            
+            // 启动多个工作线程
+            for (int i = 0; i < 3; i++) {
+                final int workerId = i + 1;
+                workerExecutor.submit(() -> workerLoop(workerId));
+            }
+        }
+    }
+
+    /**
+     * 停止爬虫工作者
+     */
+    public void stop() {
+        shouldStop.set(true);
+        isRunning.set(false);
+        
+        if (workerExecutor != null && !workerExecutor.isShutdown()) {
+            try {
+                workerExecutor.shutdown();
+                if (!workerExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    workerExecutor.shutdownNow();
+                }
+                System.out.println("爬虫工作者已停止");
+            } catch (InterruptedException e) {
+                workerExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * 工作循环
+     */
+    private void workerLoop(int workerId) {
+        System.out.println("工作者 " + workerId + " 开始运行");
+        
+        while (!shouldStop.get()) {
+            try {
+                // 检查是否暂停
+                if (queueService.isPaused()) {
+                    Thread.sleep(5000); // 暂停时等待5秒
+                    continue;
+                }
+                
+                // 获取下一个任务
+                RedisQueueService.CrawlerTask task = queueService.getNextTask();
+                
+                if (task == null) {
+                    // 没有任务时等待
+                    Thread.sleep(1000);
+                    continue;
+                }
+                
+                System.out.println("工作者 " + workerId + " 处理任务: " + task.getTaskId());
+                
+                // 执行任务
+                executeTask(task);
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                System.err.println("工作者 " + workerId + " 异常: " + e.getMessage());
+                try {
+                    Thread.sleep(5000); // 异常后等待5秒
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        
+        System.out.println("工作者 " + workerId + " 已停止");
+    }
+
+    /**
+     * 执行任务
+     */
+    private void executeTask(RedisQueueService.CrawlerTask task) {
+        long startTime = System.currentTimeMillis();
+        activeWorkers.incrementAndGet();
+        
+        TaskLogService.TaskExecutionContext context = null;
+        
+        try {
+            String taskTypeCode = getTaskTypeCode(task.getTaskType());
+            context = taskLogService.createExecutionContext(task.getTaskId(), taskTypeCode);
+            
+            context.startStep("TASK_INITIALIZATION", "初始化任务执行环境", Map.of(
+                "taskType", task.getTaskType().name(),
+                "workerId", Thread.currentThread().getId(),
+                "params", task.getParams()
+            ));
+            
+            switch (task.getTaskType()) {
+                case CATALOG_FETCH:
+                    executeCatalogFetchTask(task, context);
+                    break;
+                case PACKAGE_FETCH:
+                    executePackageFetchTask(task, context);
+                    break;
+                case PRODUCT_FETCH:
+                    executeProductFetchTask(task, context);
+                    break;
+                default:
+                    context.failStep("未知任务类型: " + task.getTaskType(), "UNKNOWN_TASK_TYPE");
+                    queueService.failTask(task.getTaskId(), "未知任务类型: " + task.getTaskType());
+                    totalTasksFailed.incrementAndGet();
+                    return;
+            }
+            
+            totalTasksProcessed.incrementAndGet();
+            
+        } catch (Exception e) {
+            String errorMessage = "执行任务失败: " + e.getMessage();
+            System.err.println("任务 " + task.getTaskId() + " " + errorMessage);
+            
+            if (context != null) {
+                context.failStep(errorMessage, "TASK_EXECUTION_ERROR", Map.of(
+                    "stackTrace", e.getStackTrace()[0].toString(),
+                    "errorClass", e.getClass().getSimpleName()
+                ));
+            } else {
+                taskLogService.logTaskFailed(task.getTaskId(), errorMessage);
+            }
+            
+            queueService.failTask(task.getTaskId(), errorMessage);
+            totalTasksFailed.incrementAndGet();
+        } finally {
+            long processingTime = System.currentTimeMillis() - startTime;
+            totalProcessingTime.addAndGet(processingTime);
+            activeWorkers.decrementAndGet();
+            
+            if (context != null) {
+                context.completeStep("任务执行完成", Map.of(
+                    "processingTimeMs", processingTime,
+                    "totalProcessed", totalTasksProcessed.get(),
+                    "totalFailed", totalTasksFailed.get()
+                ));
+            }
+        }
+    }
+    
+    private String getTaskTypeCode(RedisQueueService.TaskType taskType) {
+        switch (taskType) {
+            case CATALOG_FETCH:
+                return TaskLog.TaskType.CATALOG_CRAWL.getCode();
+            case PACKAGE_FETCH:
+                return TaskLog.TaskType.PACKAGE_CRAWL.getCode();
+            case PRODUCT_FETCH:
+                return TaskLog.TaskType.PRODUCT_CRAWL.getCode();
+            default:
+                return TaskLog.TaskType.OTHER.getCode();
+        }
+    }
+
+    /**
+     * 执行目录获取任务
+     */
+    private void executeCatalogFetchTask(RedisQueueService.CrawlerTask task, TaskLogService.TaskExecutionContext context) {
+        try {
+            context.startStep("API_REQUEST", "正在获取目录列表", Map.of(
+                "endpoint", "getCatalogs",
+                "timeout", "30s"
+            ));
+            
+            List<Map<String, Object>> catalogs = apiService.getCatalogs().get(30, TimeUnit.SECONDS);
+            
+            context.completeStep("获取到 " + catalogs.size() + " 个目录", Map.of(
+                "catalogCount", catalogs.size(),
+                "responseTime", System.currentTimeMillis()
+            ));
+            
+            context.startStep("DATA_PROCESSING", "处理目录数据并创建子任务", Map.of(
+                "catalogsToProcess", catalogs.size()
+            ));
+            
+            Map<String, Object> result = Map.of(
+                "catalogCount", catalogs.size(),
+                "catalogs", catalogs,
+                "timestamp", System.currentTimeMillis()
+            );
+            
+            queueService.completeTask(task.getTaskId(), result);
+            
+            context.startStep("SUBTASK_CREATION", "为每个分类创建封装获取任务", Map.of(
+                "catalogsToProcess", catalogs.size()
+            ));
+            
+            int createdTasks = createPackageFetchTasks(catalogs, context);
+            
+            context.completeStep("已创建 " + createdTasks + " 个子任务", Map.of(
+                "createdSubTasks", createdTasks,
+                "catalogCount", catalogs.size()
+            ));
+            
+            System.out.println("目录获取完成，共 " + catalogs.size() + " 个分类，创建 " + createdTasks + " 个子任务");
+            
+        } catch (Exception e) {
+            throw new RuntimeException("获取目录失败", e);
+        }
+    }
+
+    /**
+     * 执行封装获取任务
+     */
+    private void executePackageFetchTask(RedisQueueService.CrawlerTask task, TaskLogService.TaskExecutionContext context) {
+        try {
+            Map<String, Object> params = task.getParams();
+            Integer catalogId = (Integer) params.get("catalogId");
+            
+            context.startStep("PARAMETER_VALIDATION", "验证任务参数", Map.of(
+                "catalogId", catalogId,
+                "paramCount", params.size()
+            ));
+            
+            context.completeStep("参数验证通过", Map.of("catalogId", catalogId));
+            
+            context.startStep("API_REQUEST", "请求分类封装数据", Map.of(
+                "catalogId", catalogId,
+                "endpoint", "getPackages",
+                "timeout", "30s"
+            ));
+            
+            long apiStartTime = System.currentTimeMillis();
+            List<Map<String, Object>> packages = apiService.getPackages(List.of(catalogId))
+                    .get(30, TimeUnit.SECONDS);
+            long apiDuration = System.currentTimeMillis() - apiStartTime;
+            
+            context.completeStep("获取到 " + packages.size() + " 种封装", Map.of(
+                "packageCount", packages.size(),
+                "apiResponseTimeMs", apiDuration,
+                "catalogId", catalogId
+            ));
+            
+            context.startStep("DATA_PROCESSING", "处理封装数据", Map.of(
+                "packagesToProcess", packages.size()
+            ));
+            
+            Map<String, Object> result = Map.of(
+                "catalogId", catalogId,
+                "packageCount", packages.size(),
+                "packages", packages,
+                "timestamp", System.currentTimeMillis()
+            );
+            
+            queueService.completeTask(task.getTaskId(), result);
+            
+            context.completeStep("封装数据处理完成", Map.of(
+                "processedPackages", packages.size()
+            ));
+            
+            context.startStep("SUBTASK_CREATION", "创建产品获取任务", Map.of(
+                "catalogId", catalogId,
+                "packageCount", packages.size()
+            ));
+            
+            int createdTasks = createProductFetchTasks(catalogId, packages, context);
+            
+            context.completeStep("已创建 " + createdTasks + " 个产品获取任务", Map.of(
+                "createdProductTasks", createdTasks,
+                "catalogId", catalogId,
+                "packageCount", packages.size()
+            ));
+            
+            System.out.println("分类 " + catalogId + " 封装获取完成，共 " + packages.size() + " 种封装，创建 " + createdTasks + " 个任务");
+            
+        } catch (Exception e) {
+            throw new RuntimeException("获取封装失败", e);
+        }
+    }
+
+    /**
+     * 执行产品获取任务
+     */
+    private void executeProductFetchTask(RedisQueueService.CrawlerTask task, TaskLogService.TaskExecutionContext context) {
+        try {
+            Map<String, Object> params = task.getParams();
+            Integer catalogId = (Integer) params.get("catalogId");
+            String packageName = (String) params.get("packageName");
+            Integer currentPage = (Integer) params.get("currentPage");
+            Integer pageSize = (Integer) params.get("pageSize");
+            
+            context.startStep("PARAMETER_VALIDATION", "验证产品获取参数", Map.of(
+                "catalogId", catalogId,
+                "packageName", packageName,
+                "currentPage", currentPage,
+                "pageSize", pageSize
+            ));
+            
+            context.completeStep("参数验证通过", Map.of(
+                "validatedParams", Map.of(
+                    "catalogId", catalogId,
+                    "packageName", packageName,
+                    "page", currentPage + "/" + "unknown"
+                )
+            ));
+            
+            context.startStep("API_REQUEST", "请求产品数据", Map.of(
+                "catalogId", catalogId,
+                "packageName", packageName,
+                "currentPage", currentPage,
+                "pageSize", pageSize,
+                "endpoint", "getProductList"
+            ));
+            
+            long apiStartTime = System.currentTimeMillis();
+            Map<String, Object> response = apiService.getProductList(
+                currentPage, 
+                pageSize, 
+                List.of(catalogId), 
+                null, 
+                List.of(packageName)
+            ).get(30, TimeUnit.SECONDS);
+            long apiDuration = System.currentTimeMillis() - apiStartTime;
+            
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> products = (List<Map<String, Object>>) response.get("dataList");
+            Integer totalPages = (Integer) response.get("totalPages");
+            
+            context.completeStep("获取到 " + products.size() + " 个产品", Map.of(
+                "productCount", products.size(),
+                "currentPage", currentPage,
+                "totalPages", totalPages,
+                "apiResponseTimeMs", apiDuration,
+                "progressPercent", (currentPage * 100.0 / totalPages)
+            ));
+            
+            context.startStep("DATA_PROCESSING", "处理产品数据", Map.of(
+                "productsToProcess", products.size(),
+                "catalogId", catalogId
+            ));
+            
+            long processStartTime = System.currentTimeMillis();
+            Map<String, Integer> processResult = dataProcessor.processBatch(products, catalogId, null)
+                    .get(30, TimeUnit.SECONDS);
+            long processDuration = System.currentTimeMillis() - processStartTime;
+            
+            context.completeStep("产品数据处理完成", Map.of(
+                "processedCount", processResult.get("processed"),
+                "failedCount", processResult.get("failed"),
+                "successRate", (processResult.get("processed") * 100.0 / products.size()),
+                "processTimeMs", processDuration
+            ));
+            
+            Map<String, Object> result = Map.of(
+                "catalogId", catalogId,
+                "packageName", packageName,
+                "currentPage", currentPage,
+                "totalPages", totalPages,
+                "productCount", products.size(),
+                "processedCount", processResult.get("processed"),
+                "failedCount", processResult.get("failed"),
+                "timestamp", System.currentTimeMillis()
+            );
+            
+            queueService.completeTask(task.getTaskId(), result);
+            
+            // 如果还有更多页面，创建下一页任务
+            if (currentPage < totalPages) {
+                context.startStep("NEXT_PAGE_SCHEDULING", "创建下一页任务", Map.of(
+                    "nextPage", currentPage + 1,
+                    "totalPages", totalPages,
+                    "remainingPages", totalPages - currentPage
+                ));
+                
+                createNextPageTask(catalogId, packageName, currentPage + 1, pageSize);
+                
+                context.completeStep("下一页任务已创建", Map.of(
+                    "scheduledPage", currentPage + 1,
+                    "progressPercent", (currentPage * 100.0 / totalPages)
+                ));
+            } else {
+                context.startStep("PAGE_COMPLETION", "页面爬取完成", Map.of(
+                    "finalPage", currentPage,
+                    "totalPages", totalPages,
+                    "isLastPage", true
+                ));
+                
+                context.completeStep("所有页面已完成", Map.of(
+                    "completedPages", totalPages,
+                    "packageName", packageName,
+                    "catalogId", catalogId
+                ));
+            }
+            
+            System.out.println("产品获取完成 - 分类: " + catalogId + 
+                             ", 封装: " + packageName + 
+                             ", 页面: " + currentPage + "/" + totalPages + 
+                             ", 处理: " + processResult.get("processed") + " 个产品");
+            
+        } catch (Exception e) {
+            throw new RuntimeException("获取产品失败", e);
+        }
+    }
+
+    /**
+     * 为分类创建封装获取任务
+     */
+    private int createPackageFetchTasks(List<Map<String, Object>> catalogs, TaskLogService.TaskExecutionContext context) {
+        int createdTasks = 0;
+        
+        for (Map<String, Object> catalog : catalogs) {
+            Integer catalogId = (Integer) catalog.get("catalogId");
+            
+            Map<String, Object> params = Map.of("catalogId", catalogId);
+            queueService.createTask(RedisQueueService.TaskType.PACKAGE_FETCH, params);
+            createdTasks++;
+            
+            if (context != null && createdTasks % 10 == 0) {
+                context.updateProgress("已创建 " + createdTasks + " 个任务", Map.of(
+                    "createdTasks", createdTasks,
+                    "totalCatalogs", catalogs.size()
+                ));
+            }
+            
+            // 处理子分类
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> children = (List<Map<String, Object>>) catalog.get("childCatalogs");
+            if (children != null && !children.isEmpty()) {
+                for (Map<String, Object> child : children) {
+                    Integer childCatalogId = (Integer) child.get("catalogId");
+                    Map<String, Object> childParams = Map.of("catalogId", childCatalogId);
+                    queueService.createTask(RedisQueueService.TaskType.PACKAGE_FETCH, childParams);
+                    createdTasks++;
+                }
+            }
+        }
+        
+        return createdTasks;
+    }
+
+    /**
+     * 为封装创建产品获取任务
+     */
+    private int createProductFetchTasks(Integer catalogId, List<Map<String, Object>> packages, TaskLogService.TaskExecutionContext context) {
+        int createdTasks = 0;
+        
+        for (Map<String, Object> packageData : packages) {
+            String packageName = (String) packageData.get("name");
+            
+            Map<String, Object> params = Map.of(
+                "catalogId", catalogId,
+                "packageName", packageName,
+                "currentPage", 1,
+                "pageSize", 25
+            );
+            
+            queueService.createTask(RedisQueueService.TaskType.PRODUCT_FETCH, params);
+            createdTasks++;
+            
+            if (context != null && createdTasks % 5 == 0) {
+                context.updateProgress("已为 " + createdTasks + " 个封装创建任务", Map.of(
+                    "createdProductTasks", createdTasks,
+                    "totalPackages", packages.size(),
+                    "catalogId", catalogId
+                ));
+            }
+        }
+        
+        return createdTasks;
+    }
+
+    /**
+     * 创建下一页任务
+     */
+    private void createNextPageTask(Integer catalogId, String packageName, Integer nextPage, Integer pageSize) {
+        Map<String, Object> params = Map.of(
+            "catalogId", catalogId,
+            "packageName", packageName,
+            "currentPage", nextPage,
+            "pageSize", pageSize
+        );
+        
+        queueService.createTask(RedisQueueService.TaskType.PRODUCT_FETCH, params);
+    }
+
+    /**
+     * 获取工作状态
+     */
+    public Map<String, Object> getWorkerStatus() {
+        long totalTasks = totalTasksProcessed.get() + totalTasksFailed.get();
+        double successRate = totalTasks > 0 ? (totalTasksProcessed.get() * 100.0 / totalTasks) : 0.0;
+        double avgProcessingTime = totalTasksProcessed.get() > 0 ? 
+            (totalProcessingTime.get() * 1.0 / totalTasksProcessed.get()) : 0.0;
+            
+        return Map.of(
+            "isRunning", isRunning.get(),
+            "shouldStop", shouldStop.get(),
+            "threadCount", 3,
+            "activeWorkers", activeWorkers.get(),
+            "performance", Map.of(
+                "totalTasksProcessed", totalTasksProcessed.get(),
+                "totalTasksFailed", totalTasksFailed.get(),
+                "successRate", Math.round(successRate * 100.0) / 100.0,
+                "avgProcessingTimeMs", Math.round(avgProcessingTime * 100.0) / 100.0,
+                "totalProcessingTimeMs", totalProcessingTime.get()
+            ),
+            "queueStatus", queueService.getQueueStatus(),
+            "timestamp", System.currentTimeMillis()
+        );
+    }
+
+    /**
+     * 手动创建完整爬取任务
+     */
+    public String startFullCrawl() {
+        try {
+            // 创建初始目录获取任务
+            String taskId = queueService.createTask(
+                RedisQueueService.TaskType.CATALOG_FETCH, 
+                Map.of("fullCrawl", true)
+            );
+            
+            // 记录任务开始日志
+            taskLogService.logTaskStart(taskId, "FULL_CRAWL", Map.of("fullCrawl", true));
+            
+            System.out.println("开始完整爬取，初始任务: " + taskId);
+            return taskId;
+            
+        } catch (Exception e) {
+            throw new RuntimeException("启动完整爬取失败", e);
+        }
+    }
+
+    /**
+     * 检查是否正在运行
+     */
+    public boolean isRunning() {
+        return isRunning.get();
+    }
+}

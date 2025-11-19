@@ -1,0 +1,558 @@
+package com.lcsc.service.crawler.core;
+
+import com.lcsc.service.crawler.network.HttpClientService;
+import com.lcsc.service.crawler.parser.CatalogParser;
+import com.lcsc.service.crawler.parser.ProductParser;
+import com.lcsc.service.ProductService;
+import com.lcsc.service.TaskLogService;
+import com.lcsc.entity.Product;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * 立创商城爬虫核心服务
+ * 协调各个模块完成爬取任务
+ * 
+ * @author lcsc-crawler
+ * @since 2024-01-01
+ */
+@Service
+public class LcscCrawlerService {
+
+    private static final Logger logger = LoggerFactory.getLogger(LcscCrawlerService.class);
+
+    // API地址常量
+    private static final String CATALOG_URL = "https://wmsc.lcsc.com/ftps/wm/product/catalogs/search";
+    private static final String SEARCH_PARAM_GROUP_URL = "https://wmsc.lcsc.com/ftps/wm/product/search/param/group";
+    private static final String SEARCH_LIST_URL = "https://wmsc.lcsc.com/ftps/wm/product/search/list";
+
+    @Autowired
+    private HttpClientService httpClientService;
+
+    @Autowired
+    private CatalogParser catalogParser;
+
+    @Autowired
+    private ProductParser productParser;
+
+    @Autowired
+    private ProductService productService;
+    
+    @Autowired
+    private TaskLogService taskLogService;
+
+    private final ExecutorService executorService = Executors.newFixedThreadPool(5);
+
+    /**
+     * 获取并缓存产品目录
+     * 
+     * @return 目录映射列表
+     */
+    public List<Map<String, Object>> getCatalogMapping() {
+        logger.info("开始获取产品目录");
+        
+        try {
+            Map<String, Object> response = httpClientService.get(CATALOG_URL);
+            List<Map<String, Object>> catalogMapping = catalogParser.parseCatalogMapping(response);
+            
+            logger.info("成功获取产品目录，包含 {} 个一级分类", catalogMapping.size());
+            return catalogMapping;
+            
+        } catch (Exception e) {
+            logger.error("获取产品目录失败", e);
+            throw new RuntimeException("获取产品目录失败", e);
+        }
+    }
+
+    /**
+     * 爬取指定目录的所有产品数据（增强版本，支持详细步骤追踪）
+     * 
+     * @param taskId 任务ID
+     * @param catalogId 目录ID
+     * @param categoryLevel1Id 一级分类ID（用于数据库存储）
+     * @return 爬取的产品数量
+     */
+    public int crawlCatalogData(String taskId, Integer catalogId, Integer categoryLevel1Id) {
+        logger.info("开始爬取目录数据: taskId={}, catalogId={}, categoryLevel1Id={}", taskId, catalogId, categoryLevel1Id);
+        
+        // 创建任务执行上下文
+        TaskLogService.TaskExecutionContext context = taskLogService.createExecutionContext(
+            taskId, TaskLog.TaskType.CATALOG_CRAWL.getCode());
+        
+        AtomicInteger totalProducts = new AtomicInteger(0);
+        
+        try {
+            // 1. 初始化任务
+            context.startStep(TaskLog.TaskStep.INIT.getCode(), 
+                String.format("开始爬取目录数据 - catalogId: %d", catalogId), 0);
+            
+            // 2. 获取制造商列表
+            context.startStep(TaskLog.TaskStep.FETCHING_MANUFACTURERS.getCode(), 
+                "正在获取制造商列表...", 10);
+            
+            List<Map<String, Object>> manufacturers = getManufacturers(catalogId);
+            logger.info("目录 {} 包含 {} 个制造商", catalogId, manufacturers.size());
+            
+            Map<String, Object> manufacturerMetadata = Map.of(
+                "catalogId", catalogId,
+                "manufacturerCount", manufacturers.size(),
+                "manufacturerIds", manufacturers.stream()
+                    .map(m -> getIntegerValue(m, "id", 0))
+                    .filter(id -> id > 0)
+                    .toList()
+            );
+            
+            context.completeStep("获取到 " + manufacturers.size() + " 个制造商", manufacturerMetadata);
+            
+            // 3. 处理制造商
+            int totalManufacturers = manufacturers.size();
+            if (totalManufacturers == 0) {
+                context.startStep(TaskLog.TaskStep.COMPLETED.getCode(), "没有找到制造商，任务完成", 100);
+                context.completeStep("目录爬取完成，产品数量: 0", Map.of("totalProducts", 0));
+                return 0;
+            }
+            
+            for (int i = 0; i < totalManufacturers; i++) {
+                Map<String, Object> manufacturer = manufacturers.get(i);
+                Integer brandId = getIntegerValue(manufacturer, "id", null);
+                if (brandId == null) {
+                    logger.warn("制造商缺少ID字段: {}", manufacturer);
+                    context.log(TaskLog.LogLevel.WARN.getCode(), 
+                              TaskLog.TaskStep.PROCESSING_MANUFACTURER.getCode(), 
+                              "制造商缺少ID字段: " + manufacturer.toString(), null);
+                    continue;
+                }
+                
+                try {
+                    int progress = 20 + (70 * i / totalManufacturers); // 20-90% for manufacturer processing
+                    context.startStep(TaskLog.TaskStep.PROCESSING_MANUFACTURER.getCode(), 
+                        String.format("正在处理制造商 %d (%d/%d)", brandId, i + 1, totalManufacturers), progress);
+                    
+                    int count = processManufacturerEnhanced(context, catalogId, categoryLevel1Id, brandId, i, totalManufacturers);
+                    totalProducts.addAndGet(count);
+                    
+                    logger.info("制造商 {} 爬取完成，产品数量: {}", brandId, count);
+                    context.completeStep(
+                        String.format("制造商 %d 爬取完成，产品数量: %d", brandId, count), 
+                        Map.of("brandId", brandId, "productCount", count, "totalSoFar", totalProducts.get()));
+                    
+                } catch (Exception e) {
+                    logger.error("处理制造商 {} 时发生错误", brandId, e);
+                    context.failStep(TaskLog.ErrorCode.UNKNOWN_ERROR.getCode(), 
+                        String.format("处理制造商 %d 时发生错误", brandId), e);
+                    // 继续处理下一个制造商
+                }
+            }
+            
+            // 4. 完成任务
+            context.startStep(TaskLog.TaskStep.COMPLETED.getCode(), 
+                "正在完成目录爬取任务...", 95);
+            
+            Map<String, Object> completionResult = Map.of(
+                "catalogId", catalogId,
+                "categoryLevel1Id", categoryLevel1Id,
+                "totalProducts", totalProducts.get(),
+                "manufacturerCount", totalManufacturers,
+                "duration", "completed"
+            );
+            
+            context.completeStep("目录爬取完成，总产品数量: " + totalProducts.get(), completionResult);
+            
+            logger.info("目录 {} 爬取完成，总产品数量: {}", catalogId, totalProducts.get());
+            return totalProducts.get();
+            
+        } catch (Exception e) {
+            logger.error("爬取目录数据失败: catalogId={}", catalogId, e);
+            context.failStep(TaskLog.ErrorCode.UNKNOWN_ERROR.getCode(), 
+                "爬取目录数据失败", e);
+            throw new RuntimeException("爬取目录数据失败", e);
+        } finally {
+            // 清理上下文资源
+            context.cleanup();
+        }
+    }
+
+    /**
+     * 处理指定制造商的数据（增强版）
+     */
+    private int processManufacturerEnhanced(TaskLogService.TaskExecutionContext context, 
+                                          Integer catalogId, Integer categoryLevel1Id, 
+                                          Integer brandId, int manufacturerIndex, int totalManufacturers) {
+        logger.debug("开始处理制造商: brandId={}", brandId);
+        
+        String subTaskId = context.getTaskId() + "_manufacturer_" + brandId;
+        TaskLogService.TaskExecutionContext subContext = taskLogService.createExecutionContext(
+            subTaskId, TaskLog.TaskType.PRODUCT_CRAWL.getCode());
+        
+        AtomicInteger manufacturerProducts = new AtomicInteger(0);
+        
+        try {
+            // 获取该制造商的封装列表
+            subContext.startStep(TaskLog.TaskStep.FETCHING_PACKAGES.getCode(), 
+                String.format("正在获取制造商 %d 的封装列表", brandId), 10);
+                
+            List<Map<String, Object>> packages = getPackages(catalogId, brandId);
+            logger.debug("制造商 {} 包含 {} 个封装", brandId, packages.size());
+            
+            Map<String, Object> packageMetadata = Map.of(
+                "brandId", brandId,
+                "packageCount", packages.size(),
+                "packageNames", packages.stream()
+                    .map(p -> getStringValue(p, "name", "unknown"))
+                    .toList()
+            );
+            
+            subContext.completeStep(String.format("获取到 %d 个封装", packages.size()), packageMetadata);
+            
+            if (packages.isEmpty()) {
+                subContext.startStep(TaskLog.TaskStep.COMPLETED.getCode(), "没有找到封装，处理完成", 100);
+                subContext.completeStep("制造商处理完成，产品数量: 0", Map.of("totalProducts", 0));
+                return 0;
+            }
+            
+            // 遍历封装
+            for (int i = 0; i < packages.size(); i++) {
+                Map<String, Object> packageInfo = packages.get(i);
+                String packageName = getStringValue(packageInfo, "name", null);
+                if (packageName == null || packageName.isEmpty()) {
+                    logger.warn("封装缺少名称: {}", packageInfo);
+                    subContext.log(TaskLog.LogLevel.WARN.getCode(), 
+                                 TaskLog.TaskStep.PROCESSING_PACKAGE.getCode(),
+                                 "封装缺少名称: " + packageInfo.toString(), null);
+                    continue;
+                }
+                
+                try {
+                    int packageProgress = 20 + (70 * i / packages.size());
+                    subContext.startStep(TaskLog.TaskStep.PROCESSING_PACKAGE.getCode(), 
+                        String.format("正在处理封装 %s (%d/%d)", packageName, i + 1, packages.size()), packageProgress);
+                    
+                    int count = processPackageEnhanced(subContext, catalogId, categoryLevel1Id, brandId, packageName, i, packages.size());
+                    manufacturerProducts.addAndGet(count);
+                    
+                    logger.debug("封装 {} 处理完成，产品数量: {}", packageName, count);
+                    subContext.completeStep(
+                        String.format("封装 %s 处理完成，产品数量: %d", packageName, count),
+                        Map.of("packageName", packageName, "productCount", count));
+                    
+                } catch (Exception e) {
+                    logger.error("处理封装 {} 时发生错误", packageName, e);
+                    subContext.failStep(TaskLog.ErrorCode.PARSE_ERROR.getCode(),
+                        String.format("处理封装 %s 时发生错误", packageName), e);
+                    // 继续处理下一个封装
+                }
+            }
+            
+            // 完成制造商处理
+            subContext.startStep(TaskLog.TaskStep.COMPLETED.getCode(), "完成制造商数据处理", 95);
+            subContext.completeStep("制造商处理完成", 
+                Map.of("brandId", brandId, "totalProducts", manufacturerProducts.get(), "packageCount", packages.size()));
+            
+            // 更新主任务进度
+            int mainProgress = 20 + (70 * (manufacturerIndex + 1) / totalManufacturers);
+            context.updateProgress(mainProgress, 
+                String.format("制造商 %d 处理完成 (%d/%d)，已获取 %d 个产品", 
+                             brandId, manufacturerIndex + 1, totalManufacturers, manufacturerProducts.get()));
+            
+            return manufacturerProducts.get();
+            
+        } catch (Exception e) {
+            logger.error("处理制造商失败: brandId={}", brandId, e);
+            subContext.failStep(TaskLog.ErrorCode.UNKNOWN_ERROR.getCode(), "处理制造商失败", e);
+            return 0;
+        } finally {
+            subContext.cleanup();
+        }
+    }
+
+    /**
+     * 保持旧方法的兼容性
+     */
+    private int processManufacturer(String taskId, Integer catalogId, Integer categoryLevel1Id, Integer brandId) {
+        TaskLogService.TaskExecutionContext context = taskLogService.createExecutionContext(
+            taskId, TaskLog.TaskType.PRODUCT_CRAWL.getCode());
+        
+        try {
+            return processManufacturerEnhanced(context, catalogId, categoryLevel1Id, brandId, 0, 1);
+        } finally {
+            context.cleanup();
+        }
+    }
+
+    /**
+     * 处理指定封装的分页数据（增强版）
+     */
+    private int processPackageEnhanced(TaskLogService.TaskExecutionContext context,
+                                     Integer catalogId, Integer categoryLevel1Id, 
+                                     Integer brandId, String packageName, int packageIndex, int totalPackages) {
+        logger.debug("开始处理封装: packageName={}", packageName);
+        
+        AtomicInteger packageProducts = new AtomicInteger(0);
+        int currentPage = 1;
+        int totalPages = 1; // 初始假设只有1页
+        
+        try {
+            do {
+                try {
+                    // 开始处理当前页
+                    context.updateProgress(null, 
+                        String.format("正在获取封装 %s 第 %d 页数据...", packageName, currentPage));
+                    
+                    // 构造请求参数
+                    Map<String, Object> requestData = new HashMap<>();
+                    requestData.put("currentPage", currentPage);
+                    requestData.put("pageSize", 25);
+                    requestData.put("catalogIdList", Arrays.asList(catalogId));
+                    requestData.put("brandIdList", Arrays.asList(brandId));
+                    requestData.put("encapValueList", Arrays.asList(packageName));
+                    
+                    // 记录API请求开始
+                    long apiStart = System.currentTimeMillis();
+                    
+                    // 请求产品列表
+                    Map<String, Object> response = httpClientService.post(SEARCH_LIST_URL, requestData);
+                    Map<String, Object> parseResult = productParser.parseProductListResponse(response);
+                    
+                    long apiDuration = System.currentTimeMillis() - apiStart;
+                    
+                    // 获取分页信息
+                    totalPages = (Integer) parseResult.get("totalPage");
+                    int totalCount = (Integer) parseResult.get("totalCount");
+                    
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> dataList = 
+                        (List<Map<String, Object>>) parseResult.get("dataList");
+                    
+                    if (dataList.isEmpty()) {
+                        logger.debug("第 {} 页没有数据，结束处理", currentPage);
+                        break;
+                    }
+                    
+                    // 记录页面获取结果
+                    Map<String, Object> pageMetadata = Map.of(
+                        "currentPage", currentPage,
+                        "totalPages", totalPages,
+                        "pageSize", dataList.size(),
+                        "totalCount", totalCount,
+                        "apiDuration", apiDuration,
+                        "packageName", packageName,
+                        "brandId", brandId
+                    );
+                    
+                    context.updateProgress(null, 
+                        String.format("第 %d/%d 页获取到 %d 个产品，API耗时 %dms", 
+                                     currentPage, totalPages, dataList.size(), apiDuration));
+                    
+                    // 处理产品数据
+                    List<Product> products = new ArrayList<>();
+                    int parseErrors = 0;
+                    
+                    for (Map<String, Object> productData : dataList) {
+                        try {
+                            Product product = productParser.convertToProduct(
+                                productData, categoryLevel1Id, catalogId);
+                            products.add(product);
+                        } catch (Exception e) {
+                            parseErrors++;
+                            logger.error("转换产品数据失败: {}", 
+                                productData.get("productCode"), e);
+                        }
+                    }
+                    
+                    // 批量保存产品
+                    if (!products.isEmpty()) {
+                        long saveStart = System.currentTimeMillis();
+                        saveProducts(products);
+                        long saveDuration = System.currentTimeMillis() - saveStart;
+                        
+                        packageProducts.addAndGet(products.size());
+                        
+                        Map<String, Object> saveMetadata = Map.of(
+                            "savedCount", products.size(),
+                            "parseErrors", parseErrors,
+                            "saveDuration", saveDuration,
+                            "currentPage", currentPage,
+                            "totalPages", totalPages
+                        );
+                        
+                        logger.debug("第 {} 页处理完成: {}/{} 页, 保存产品数量: {}, 解析错误: {}, 总数量: {}", 
+                            currentPage, currentPage, totalPages, products.size(), parseErrors, totalCount);
+                        
+                        context.updateProgress(null,
+                            String.format("第 %d/%d 页保存完成，保存 %d 个产品，耗时 %dms", 
+                                         currentPage, totalPages, products.size(), saveDuration));
+                    }
+                    
+                    currentPage++;
+                    
+                } catch (Exception e) {
+                    logger.error("处理第 {} 页时发生错误", currentPage, e);
+                    context.log(TaskLog.LogLevel.ERROR.getCode(),
+                              TaskLog.TaskStep.FETCHING_PRODUCTS.getCode(),
+                              String.format("处理第 %d 页时发生错误: %s", currentPage, e.getMessage()),
+                              null);
+                    // 继续处理下一页
+                    currentPage++;
+                }
+                
+            } while (currentPage <= totalPages);
+            
+            logger.debug("封装 {} 处理完成，总产品数量: {}", packageName, packageProducts.get());
+            return packageProducts.get();
+            
+        } catch (Exception e) {
+            logger.error("处理封装 {} 失败", packageName, e);
+            context.failStep(TaskLog.ErrorCode.API_ERROR.getCode(),
+                String.format("处理封装 %s 失败", packageName), e);
+            return packageProducts.get();
+        }
+    }
+
+    /**
+     * 保持旧方法的兼容性
+     */
+    private int processPackage(String taskId, Integer catalogId, Integer categoryLevel1Id, 
+                             Integer brandId, String packageName) {
+        TaskLogService.TaskExecutionContext context = taskLogService.createExecutionContext(
+            taskId, TaskLog.TaskType.PRODUCT_CRAWL.getCode());
+            
+        try {
+            return processPackageEnhanced(context, catalogId, categoryLevel1Id, brandId, packageName, 0, 1);
+        } finally {
+            context.cleanup();
+        }
+    }
+
+    /**
+     * 获取制造商列表
+     * 
+     * @param catalogId 目录ID
+     * @return 制造商列表
+     */
+    private List<Map<String, Object>> getManufacturers(Integer catalogId) {
+        Map<String, Object> requestData = new HashMap<>();
+        requestData.put("catalogIdList", Arrays.asList(catalogId));
+        
+        Map<String, Object> response = httpClientService.post(SEARCH_PARAM_GROUP_URL, requestData);
+        return catalogParser.parseManufacturers(response);
+    }
+
+    /**
+     * 获取封装列表
+     * 
+     * @param catalogId 目录ID
+     * @param brandId 品牌ID
+     * @return 封装列表
+     */
+    private List<Map<String, Object>> getPackages(Integer catalogId, Integer brandId) {
+        Map<String, Object> requestData = new HashMap<>();
+        requestData.put("catalogIdList", Arrays.asList(catalogId));
+        requestData.put("brandIdList", Arrays.asList(brandId));
+        
+        Map<String, Object> response = httpClientService.post(SEARCH_PARAM_GROUP_URL, requestData);
+        return catalogParser.parsePackages(response);
+    }
+
+    /**
+     * 批量保存产品
+     * 
+     * @param products 产品列表
+     */
+    private void saveProducts(List<Product> products) {
+        try {
+            for (Product product : products) {
+                productService.saveOrUpdateProduct(product);
+            }
+            logger.debug("批量保存 {} 个产品成功", products.size());
+        } catch (Exception e) {
+            logger.error("批量保存产品失败", e);
+            throw new RuntimeException("批量保存产品失败", e);
+        }
+    }
+
+    /**
+     * 异步爬取单个产品
+     * 
+     * @param productCode 产品编码
+     * @return CompletableFuture
+     */
+    public CompletableFuture<Boolean> crawlSingleProductAsync(String productCode) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                logger.info("开始爬取单个产品: {}", productCode);
+                // 这里可以实现单个产品的爬取逻辑
+                // 暂时返回true表示成功
+                return true;
+            } catch (Exception e) {
+                logger.error("爬取单个产品失败: {}", productCode, e);
+                return false;
+            }
+        }, executorService);
+    }
+
+    /**
+     * 异步批量爬取产品
+     * 
+     * @param productCodes 产品编码列表
+     * @return CompletableFuture
+     */
+    public CompletableFuture<Map<String, Boolean>> crawlProductBatchAsync(List<String> productCodes) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Boolean> results = new HashMap<>();
+            
+            for (String productCode : productCodes) {
+                try {
+                    logger.info("批量爬取产品: {}", productCode);
+                    // 这里可以实现批量爬取逻辑
+                    results.put(productCode, true);
+                } catch (Exception e) {
+                    logger.error("批量爬取产品失败: {}", productCode, e);
+                    results.put(productCode, false);
+                }
+            }
+            
+            return results;
+        }, executorService);
+    }
+
+    // 辅助方法：安全获取字符串值
+    private String getStringValue(Map<String, Object> map, String key, String defaultValue) {
+        Object value = map.get(key);
+        return value != null ? value.toString() : defaultValue;
+    }
+
+    // 辅助方法：安全获取整数值
+    private Integer getIntegerValue(Map<String, Object> map, String key, Integer defaultValue) {
+        Object value = map.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        if (value instanceof String) {
+            try {
+                return Integer.parseInt((String) value);
+            } catch (NumberFormatException e) {
+                logger.debug("无法解析整数值: {} = {}", key, value);
+            }
+        }
+        return defaultValue;
+    }
+
+    /**
+     * 关闭资源
+     */
+    public void shutdown() {
+        if (executorService != null && !executorService.isShutdown()) {
+            executorService.shutdown();
+            logger.info("爬虫服务线程池已关闭");
+        }
+    }
+}

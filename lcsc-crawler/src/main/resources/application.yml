@@ -1,0 +1,120 @@
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: ${SERVER_CONTEXT_PATH:}
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  mvc:
+    async:
+      request-timeout: 300000  # 异步请求超时时间设置为5分钟
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DATABASE_URL:jdbc:mysql://localhost:13306/lcsc?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${DATABASE_USERNAME:lcsc_user}
+    password: ${DATABASE_PASSWORD:lcsc123456}
+    # 连接池配置
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      auto-commit: true
+      idle-timeout: 30000
+      pool-name: LcscHikariCP
+      max-lifetime: 1800000
+      connection-timeout: 30000
+    
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+  
+  redis:
+    host: localhost
+    port: 6380
+    password: lcsc123456
+    database: 0
+
+  # 数据库自动初始化配置
+  sql:
+    init:
+      schema-locations: classpath:db/lcsc_full_schema.sql
+      mode: always
+      continue-on-error: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      id-type: auto
+
+# 爬虫配置
+crawler:
+  delay: 2000  # 爬取间隔(毫秒)
+  timeout: 10000  # 超时时间(毫秒)
+  user-agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  headless: true  # 是否启用无头模式
+  max-retry: 10   # 最大重试次数
+  thread-pool-size: 5  # 线程池大小
+  auto-retry: true     # 是否自动重试
+  save-images: true    # 是否保存图片
+  # API地址配置
+  api:
+    catalog-url: "https://wmsc.lcsc.com/ftps/wm/product/catalogs/search"
+    search-param-group-url: "https://wmsc.lcsc.com/ftps/wm/product/search/param/group"
+    search-list-url: "https://wmsc.lcsc.com/ftps/wm/product/search/list"
+  # 存储配置
+  storage:
+    base-path: "${CRAWLER_STORAGE_PATH:#{systemProperties['user.dir']}/data}" # 数据存储根目录, 默认为后端模块下的data文件夹
+  # HTTP调试配置
+  http:
+    debug:
+      enabled: ${CRAWLER_HTTP_DEBUG_ENABLED:true}  # 是否启用HTTP调试日志
+      print-full-response: ${CRAWLER_HTTP_DEBUG_FULL_RESPONSE:true}  # 是否打印完整响应体
+      print-headers: ${CRAWLER_HTTP_DEBUG_HEADERS:false}  # 是否打印请求头信息
+      max-response-length: ${CRAWLER_HTTP_DEBUG_MAX_LENGTH:10000}  # 响应体最大打印长度
+      print-api-call-details: ${CRAWLER_HTTP_DEBUG_API_DETAILS:true}  # 是否打印API调用详细信息
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+    com.lcsc: ${APP_LOG_LEVEL:DEBUG}
+    org.springframework.jdbc: DEBUG
+    org.mybatis: DEBUG
+    com.baomidou.mybatisplus: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: ${LOG_FILE_PATH:logs/lcsc-crawler.log}
+    max-size: 10MB
+    max-history: 30
+
+---
+# 开发环境配置
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    hikari:
+      connection-timeout: 60000
+      validation-timeout: 3000
+      leak-detection-threshold: 60000
+  h2:
+    console:
+      enabled: true
+      
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
