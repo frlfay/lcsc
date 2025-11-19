@@ -1,24 +1,5 @@
 package com.lcsc.service.crawler.v3;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.lcsc.controller.CrawlerWebSocketController;
-import com.lcsc.entity.CategoryLevel2Code;
-import com.lcsc.entity.Product;
-import com.lcsc.mapper.CategoryLevel2CodeMapper;
-import com.lcsc.mapper.ProductMapper;
-import com.lcsc.service.ProductService;
-import com.lcsc.service.crawler.FileDownloadService;
-import com.lcsc.service.crawler.LcscApiService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.stereotype.Service;
-
-import jakarta.annotation.PreDestroy;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
@@ -36,6 +17,27 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.lcsc.controller.CrawlerWebSocketController;
+import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.Product;
+import com.lcsc.mapper.CategoryLevel2CodeMapper;
+import com.lcsc.mapper.ProductMapper;
+import com.lcsc.service.ProductService;
+import com.lcsc.service.crawler.FileDownloadService;
+import com.lcsc.service.crawler.LcscApiService;
+
+import jakarta.annotation.PreDestroy;
 
 /**
  * 分类爬虫多线程工作池V3
@@ -289,7 +291,22 @@ public class CategoryCrawlerWorkerPool {
                 // 检查是否需要停止
                 if (!isRunning) {
                     log.warn("Worker-{} 检测到停止信号，中断爬取: {}", workerId, catalogName);
-                    return false;
+                    // 停止时，如果已经爬取了部分数据，标记为已完成；否则标记为失败
+                    if (totalSaved > 0) {
+                        category.setCrawlStatus("COMPLETED");
+                        category.setCrawlProgress(100);
+                        category.setCrawledProducts(totalSaved);
+                        category.setLastCrawlTime(LocalDateTime.now());
+                        categoryMapper.updateById(category);
+                        log.info("Worker-{} 已停止，但已爬取 {} 个产品，标记分类为已完成", workerId, totalSaved);
+                        return true;  // 返回true，因为已有数据
+                    } else {
+                        category.setCrawlStatus("STOPPED");
+                        category.setCrawlProgress(0);
+                        categoryMapper.updateById(category);
+                        log.info("Worker-{} 已停止，未爬取任何产品，标记分类为已停止", workerId);
+                        return false;
+                    }
                 }
 
                 filterParams.put("currentPage", page);

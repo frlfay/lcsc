@@ -1,17 +1,5 @@
 package com.lcsc.controller;
 
-import com.lcsc.common.Result;
-import com.lcsc.entity.CategoryLevel2Code;
-import com.lcsc.service.crawler.v3.CategoryCrawlerWorkerPool;
-import com.lcsc.service.crawler.v3.CategorySyncService;
-import com.lcsc.service.crawler.v3.CrawlerTaskQueueService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.web.bind.annotation.*;
-
 import java.io.File;
 import java.nio.file.Paths;
 import java.util.HashMap;
@@ -19,9 +7,28 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.lcsc.entity.Product;
+import com.lcsc.common.Result;
 import com.lcsc.config.CrawlerConfig;
+import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.Product;
+import com.lcsc.service.crawler.v3.CategoryCrawlerWorkerPool;
+import com.lcsc.service.crawler.v3.CategorySyncService;
+import com.lcsc.service.crawler.v3.CrawlerTaskQueueService;
 
 /**
  * 爬虫控制器V3
@@ -210,20 +217,50 @@ public class CrawlerControllerV3 {
 
     /**
      * 停止爬虫（当前任务执行完后停止）
+     * 
+     * 改进：使用幂等设计，即使没有运行中的任务也返回成功
+     * 返回包含 success 字段的 Map，便于前端统一处理
      */
     @PostMapping("/stop")
-    public Result<String> stopCrawler() {
+    public Result<Map<String, Object>> stopCrawler() {
         try {
             log.info("========== 收到停止爬虫请求 ==========");
 
-            if (!workerPool.isRunning()) {
-                return Result.error("爬虫未运行");
+            // 检查爬虫状态
+            boolean isRunning = workerPool.isRunning();
+            Map<String, Object> queueStatus = queueService.getQueueStatus();
+            int pendingTasks = (int) queueStatus.getOrDefault("pending", 0);
+            int processingTasks = (int) queueStatus.getOrDefault("processing", 0);
+
+            log.info("当前状态 - Worker运行中: {}, 待处理任务: {}, 处理中任务: {}", 
+                    isRunning, pendingTasks, processingTasks);
+
+            // 幂等设计：无论当前是否运行中，都尝试停止
+            if (isRunning || pendingTasks > 0 || processingTasks > 0) {
+                workerPool.stop();
+                log.info("停止信号已发送，Worker将在当前任务完成后停止");
+                
+                Map<String, Object> result = Map.of(
+                    "success", true,
+                    "message", "爬虫将在当前任务完成后停止",
+                    "isRunning", isRunning,
+                    "pendingTasks", pendingTasks,
+                    "processingTasks", processingTasks
+                );
+                return Result.success(result);
+            } else {
+                // 已经停止或无任务，也返回成功（幂等性）
+                log.info("爬虫已停止或无待处理任务");
+                
+                Map<String, Object> result = Map.of(
+                    "success", true,
+                    "message", "爬虫已停止（无运行中的任务）",
+                    "isRunning", false,
+                    "pendingTasks", 0,
+                    "processingTasks", 0
+                );
+                return Result.success(result);
             }
-
-            workerPool.stop();
-
-            log.info("停止信号已发送，Worker将在当前任务完成后停止");
-            return Result.success("爬虫将在所有当前任务完成后停止");
 
         } catch (Exception e) {
             log.error("停止爬虫失败", e);

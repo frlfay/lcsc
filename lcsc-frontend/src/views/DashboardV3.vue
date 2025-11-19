@@ -122,20 +122,30 @@
             type="primary"
             size="large"
             @click="handleOpenCategorySelector"
+            :disabled="isRunning"
           >
             <template #icon><AppstoreOutlined /></template>
             选择要爬取的分类（{{ selectedCategories.length }}个已选）
           </a-button>
           <a-button
-            v-if="selectedCategories.length > 0"
+            v-if="selectedCategories.length > 0 && !isRunning"
             type="primary"
             size="large"
             class="ml-3"
-            :disabled="isRunning"
             @click="handleStartBatchCrawl"
           >
             <template #icon><PlayCircleOutlined /></template>
             开始爬取选中分类
+          </a-button>
+          <a-button
+            v-if="isRunning"
+            danger
+            size="large"
+            class="ml-3"
+            @click="handleStopCrawler"
+          >
+            <template #icon><StopOutlined /></template>
+            停止爬虫
           </a-button>
         </a-col>
         <a-col :span="8">
@@ -675,15 +685,18 @@ const handleStartBatchCrawl = async () => {
 const handleStopCrawler = async () => {
   try {
     const data = await stopCrawler()
+    // 后端现在返回 { success, message, isRunning, pendingTasks, processingTasks }
     if (data && data.success) {
-      message.success('爬虫将在当前任务完成后停止')
+      message.success(data.message || '爬虫已停止')
       isRunning.value = false
+      // 刷新状态，确保UI同步
+      await checkSystemStatus()
     } else {
-      message.error(data?.message || '停止失败')
+      message.error(data?.message || '停止失败，请检查网络连接')
     }
   } catch (error) {
     console.error('停止爬虫失败:', error)
-    message.error('停止失败，请重试')
+    message.error('停止失败，请检查网络连接后重试')
   }
 }
 
