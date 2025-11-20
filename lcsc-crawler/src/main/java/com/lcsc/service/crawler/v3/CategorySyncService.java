@@ -3,8 +3,10 @@ package com.lcsc.service.crawler.v3;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.lcsc.entity.CategoryLevel1Code;
 import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.CategoryLevel3Code;
 import com.lcsc.mapper.CategoryLevel1CodeMapper;
 import com.lcsc.mapper.CategoryLevel2CodeMapper;
+import com.lcsc.mapper.CategoryLevel3CodeMapper;
 import com.lcsc.service.crawler.LcscApiService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +44,9 @@ public class CategorySyncService {
     private CategoryLevel2CodeMapper level2Mapper;
 
     @Autowired
+    private CategoryLevel3CodeMapper level3Mapper;
+
+    @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
     private static final String REDIS_STATE_KEY = "crawler:state";
@@ -74,14 +79,16 @@ public class CategorySyncService {
                     throw new RuntimeException("API返回的分类列表为空");
                 }
 
-                // 3. 清空旧数据（覆盖模式）
+                // 3. 清空旧数据（覆盖模式 - 级联删除）
                 log.info("步骤3: 清空旧数据");
-                level2Mapper.delete(null);
-                level1Mapper.delete(null);
+                level3Mapper.delete(null);  // 先删除三级分类
+                level2Mapper.delete(null);  // 再删除二级分类
+                level1Mapper.delete(null);  // 最后删除一级分类
                 log.info("旧数据已清空");
 
                 int level1Count = 0;
                 int level2Count = 0;
+                int level3Count = 0;  // 新增三级分类计数
 
                 // 4. 批量插入新数据
                 log.info("步骤4: 开始插入新数据");
@@ -134,6 +141,38 @@ public class CategorySyncService {
 
                             log.debug("  插入二级分类: {} (ID: {})",
                                 level2.getCategoryLevel2Name(), level2.getId());
+
+                            // 🔑 关键：处理三级分类
+                            @SuppressWarnings("unchecked")
+                            List<Map<String, Object>> level3Children =
+                                (List<Map<String, Object>>) level2Data.get("childCatelogs");
+
+                            if (level3Children != null && !level3Children.isEmpty()) {
+                                for (Map<String, Object> level3Data : level3Children) {
+                                    // 获取三级分类名称，如果为空则跳过
+                                    String level3CatalogName = (String) level3Data.get("catalogNameEn");
+                                    if (level3CatalogName == null || level3CatalogName.trim().isEmpty()) {
+                                        log.warn("    跳过空三级分类名称,catalogId: {}", level3Data.get("catalogId"));
+                                        continue;
+                                    }
+
+                                    CategoryLevel3Code level3 = new CategoryLevel3Code();
+                                    level3.setCategoryLevel3Name(level3CatalogName);
+                                    level3.setCatalogId(String.valueOf(level3Data.get("catalogId")));
+                                    level3.setCategoryLevel1Id(level1.getId());
+                                    level3.setCategoryLevel2Id(level2.getId());
+                                    level3.setCrawlStatus("NOT_STARTED");
+                                    level3.setCrawlProgress(0);
+                                    level3.setCreatedAt(LocalDateTime.now());
+                                    level3.setUpdatedAt(LocalDateTime.now());
+
+                                    level3Mapper.insert(level3);
+                                    level3Count++;
+
+                                    log.debug("    插入三级分类: {} (ID: {})",
+                                        level3.getCategoryLevel3Name(), level3.getId());
+                                }
+                            }
                         }
                     }
                 }
@@ -145,6 +184,7 @@ public class CategorySyncService {
                 log.info("========== 分类同步完成 ==========");
                 log.info("一级分类: {} 个", level1Count);
                 log.info("二级分类: {} 个", level2Count);
+                log.info("三级分类: {} 个", level3Count);
 
                 // 同步完成后，刷新 Redis 中的分类名称映射，便于后续下载/处理快速读取
                 try {
@@ -157,6 +197,7 @@ public class CategorySyncService {
                     "success", true,
                     "level1Count", level1Count,
                     "level2Count", level2Count,
+                    "level3Count", level3Count,
                     "message", "分类同步成功"
                 );
 

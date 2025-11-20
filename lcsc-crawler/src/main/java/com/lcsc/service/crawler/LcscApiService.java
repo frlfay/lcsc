@@ -332,23 +332,10 @@ public class LcscApiService {
                     catalogMap.put("catalogNameEn", catalog.get("catalogNameEn").asText());
                     catalogMap.put("productNum", catalog.get("productNum").asInt());
                     
-                    // 处理子分类
+                    // 处理子分类（递归解析支持三级分类）
                     JsonNode childCatelogs = catalog.get("childCatelogs");
                     if (childCatelogs != null && childCatelogs.isArray()) {
-                        List<Map<String, Object>> children = new ArrayList<>();
-                        for (JsonNode child : childCatelogs) {
-                            Map<String, Object> childMap = new HashMap<>();
-                            childMap.put("catalogId", child.get("catalogId").asInt());
-                            
-                            JsonNode childParentId = child.get("parentId");
-                            childMap.put("parentId", childParentId.isNull() ? null : childParentId.asInt());
-                            
-                            JsonNode childCatalogName = child.get("catalogName");
-                            childMap.put("catalogName", (childCatalogName != null && !childCatalogName.isNull()) ? childCatalogName.asText() : null);
-                            childMap.put("catalogNameEn", child.get("catalogNameEn").asText());
-                            childMap.put("productNum", child.get("productNum").asInt());
-                            children.add(childMap);
-                        }
+                        List<Map<String, Object>> children = parseChildCategories(childCatelogs);
                         catalogMap.put("childCatelogs", children);
                     }
                     
@@ -378,7 +365,46 @@ public class LcscApiService {
             throw new RuntimeException("解析分类目录响应失败", e);
         }
     }
-    
+
+    /**
+     * 递归解析子分类（支持三级及更多层级）
+     *
+     * @param childCategories 子分类JsonNode数组
+     * @return 解析后的子分类列表
+     */
+    private List<Map<String, Object>> parseChildCategories(JsonNode childCategories) {
+        List<Map<String, Object>> children = new ArrayList<>();
+
+        for (JsonNode child : childCategories) {
+            Map<String, Object> childMap = new HashMap<>();
+            childMap.put("catalogId", child.get("catalogId").asInt());
+
+            JsonNode childParentId = child.get("parentId");
+            childMap.put("parentId", childParentId.isNull() ? null : childParentId.asInt());
+
+            JsonNode childCatalogName = child.get("catalogName");
+            childMap.put("catalogName", (childCatalogName != null && !childCatalogName.isNull()) ? childCatalogName.asText() : null);
+            childMap.put("catalogNameEn", child.get("catalogNameEn").asText());
+            childMap.put("productNum", child.get("productNum").asInt());
+
+            // 🔑 关键：递归处理更深层级的子分类（三级、四级等）
+            JsonNode grandChildCatelogs = child.get("childCatelogs");
+            if (grandChildCatelogs != null && grandChildCatelogs.isArray() && grandChildCatelogs.size() > 0) {
+                log.info("发现三级分类: {} ({}) 下有 {} 个子分类",
+                    childMap.get("catalogName"),
+                    childMap.get("catalogId"),
+                    grandChildCatelogs.size());
+                // 递归调用自己，解析更深层级
+                List<Map<String, Object>> grandChildren = parseChildCategories(grandChildCatelogs);
+                childMap.put("childCatelogs", grandChildren);
+            }
+
+            children.add(childMap);
+        }
+
+        return children;
+    }
+
     /**
      * 解析新query/param/group接口响应数据
      */
