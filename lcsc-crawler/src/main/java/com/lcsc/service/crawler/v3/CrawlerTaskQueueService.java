@@ -2,8 +2,10 @@ package com.lcsc.service.crawler.v3;
 
 import com.lcsc.entity.CategoryLevel1Code;
 import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.CategoryLevel3Code;
 import com.lcsc.mapper.CategoryLevel1CodeMapper;
 import com.lcsc.mapper.CategoryLevel2CodeMapper;
+import com.lcsc.service.CategoryLevel3CodeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,84 +52,129 @@ public class CrawlerTaskQueueService {
     @Autowired
     private CategoryLevel1CodeMapper level1Mapper;
 
+    @Autowired
+    private CategoryLevel3CodeService level3Service;
+
     /**
-     * 创建单个分类爬取任务
-     * @param catalogId 二级分类ID
+     * 创建单个分类爬取任务（智能识别二级或三级分类）
+     * @param categoryId 分类ID（可能是二级或三级分类的ID）
      * @param priority 优先级（10=手动, 1=自动）
      * @return 任务ID
      */
-    public String createCategoryTask(Integer catalogId, int priority) {
+    public String createCategoryTask(Integer categoryId, int priority) {
         try {
             // 1. 检查任务是否正在处理中
-            if (isTaskProcessing(catalogId)) {
-                log.warn("分类任务正在处理中，无法操作: catalogId={}", catalogId);
+            if (isTaskProcessing(categoryId)) {
+                log.warn("分类任务正在处理中，无法操作: categoryId={}", categoryId);
                 throw new RuntimeException("该分类正在爬取中，无法操作");
             }
 
             // 2. 检查任务是否已在待处理队列中
-            String oldTaskId = (String) redisTemplate.opsForHash().get(CATALOG_TO_TASK_MAP, String.valueOf(catalogId));
+            String oldTaskId = (String) redisTemplate.opsForHash().get(CATALOG_TO_TASK_MAP, String.valueOf(categoryId));
             if (oldTaskId != null) {
-                log.info("任务已在待处理队列，提升其优先级: catalogId={}, oldTaskId={}", catalogId, oldTaskId);
+                log.info("任务已在待处理队列，提升其优先级: categoryId={}, oldTaskId={}", categoryId, oldTaskId);
                 // 2a. 从待处理队列移除旧任务
                 redisTemplate.opsForZSet().remove(QUEUE_PENDING, oldTaskId);
                 // 2b. 从映射中移除
-                redisTemplate.opsForHash().delete(CATALOG_TO_TASK_MAP, String.valueOf(catalogId));
+                redisTemplate.opsForHash().delete(CATALOG_TO_TASK_MAP, String.valueOf(categoryId));
                 // 2c. 从去重集合中移除
-                redisTemplate.opsForSet().remove(DEDUP_SET, String.valueOf(catalogId));
+                redisTemplate.opsForSet().remove(DEDUP_SET, String.valueOf(categoryId));
                 // 2d. 从总任务数中减一，因为我们会重新加回来
                 redisTemplate.opsForHash().increment(STATE_KEY, "totalTasks", -1);
             }
 
-            // 3. 查询分类信息
-            CategoryLevel2Code level2 = level2Mapper.selectById(catalogId);
-            if (level2 == null) {
-                throw new RuntimeException("分类不存在: " + catalogId);
+            // 3. 智能识别分类级别（先查二级，再查三级）
+            CategoryLevel2Code level2 = level2Mapper.selectById(categoryId);
+            CategoryLevel3Code level3 = null;
+            String categoryLevel;
+            String catalogName;
+            String catalogApiId; // 立创API的catalogId
+            Integer level1Id;
+            Integer level2Id = null;
+
+            if (level2 != null) {
+                // 是二级分类
+                categoryLevel = "level2";
+                catalogName = level2.getCategoryLevel2Name();
+                catalogApiId = level2.getCatalogId();
+                level1Id = level2.getCategoryLevel1Id();
+                level2Id = level2.getId();
+                log.debug("识别为二级分类: id={}, name={}, catalogApiId={}", categoryId, catalogName, catalogApiId);
+            } else {
+                // 尝试查询三级分类
+                level3 = level3Service.getOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CategoryLevel3Code>()
+                    .eq(CategoryLevel3Code::getId, categoryId));
+
+                if (level3 == null) {
+                    throw new RuntimeException("分类不存在: " + categoryId);
+                }
+
+                // 是三级分类
+                categoryLevel = "level3";
+                catalogName = level3.getCategoryLevel3Name();
+                catalogApiId = level3.getCatalogId();
+                level1Id = level3.getCategoryLevel1Id();
+                level2Id = level3.getCategoryLevel2Id();
+                log.debug("识别为三级分类: id={}, name={}, catalogApiId={}, level2Id={}",
+                    categoryId, catalogName, catalogApiId, level2Id);
             }
 
-            CategoryLevel1Code level1 = level1Mapper.selectById(level2.getCategoryLevel1Id());
+            // 4. 查询一级分类信息
+            CategoryLevel1Code level1 = level1Mapper.selectById(level1Id);
             if (level1 == null) {
                 throw new RuntimeException("一级分类不存在");
             }
 
-            // 4. 生成任务ID
-            String taskId = "TASK_" + catalogId + "_" + System.currentTimeMillis();
+            // 5. 生成任务ID
+            String taskId = "TASK_" + categoryId + "_" + System.currentTimeMillis();
 
-            // 5. 构建任务详情
+            // 6. 构建任务详情
             Map<String, String> taskDetail = new HashMap<>();
-            taskDetail.put("catalogId", String.valueOf(catalogId));
-            taskDetail.put("catalogName", level2.getCategoryLevel2Name());
-            taskDetail.put("level1Id", String.valueOf(level2.getCategoryLevel1Id()));
+            taskDetail.put("categoryId", String.valueOf(categoryId)); // 数据库ID
+            taskDetail.put("categoryLevel", categoryLevel); // "level2" 或 "level3"
+            taskDetail.put("catalogApiId", catalogApiId); // 立创API的catalogId
+            taskDetail.put("catalogName", catalogName);
+            taskDetail.put("level1Id", String.valueOf(level1Id));
             taskDetail.put("level1Name", level1.getCategoryLevel1Name());
+            if (level2Id != null) {
+                taskDetail.put("level2Id", String.valueOf(level2Id));
+            }
             taskDetail.put("priority", String.valueOf(priority));
             taskDetail.put("status", "PENDING");
             taskDetail.put("createdAt", LocalDateTime.now().toString());
 
-            // 6. 保存任务到Redis
+            // 7. 保存任务到Redis
             redisTemplate.opsForHash().putAll(TASK_PREFIX + taskId, taskDetail);
 
-            // 7. 加入优先级队列
+            // 8. 加入优先级队列
             double score = priority * 1_000_000_000_000_000L + System.currentTimeMillis();
             redisTemplate.opsForZSet().add(QUEUE_PENDING, taskId, score);
 
-            // 8. 添加去重标记和映射
-            redisTemplate.opsForSet().add(DEDUP_SET, String.valueOf(catalogId));
-            redisTemplate.opsForHash().put(CATALOG_TO_TASK_MAP, String.valueOf(catalogId), taskId);
+            // 9. 添加去重标记和映射
+            redisTemplate.opsForSet().add(DEDUP_SET, String.valueOf(categoryId));
+            redisTemplate.opsForHash().put(CATALOG_TO_TASK_MAP, String.valueOf(categoryId), taskId);
 
-            // 9. 更新分类状态为IN_QUEUE
-            level2.setCrawlStatus("IN_QUEUE");
-            level2.setErrorMessage(null);
-            level2Mapper.updateById(level2);
+            // 10. 更新分类状态为IN_QUEUE
+            if (level2 != null) {
+                level2.setCrawlStatus("IN_QUEUE");
+                level2.setErrorMessage(null);
+                level2Mapper.updateById(level2);
+            } else if (level3 != null) {
+                level3.setCrawlStatus("IN_QUEUE");
+                level3.setErrorMessage(null);
+                level3Service.updateById(level3);
+            }
 
-            // 10. 更新全局统计
+            // 11. 更新全局统计
             redisTemplate.opsForHash().increment(STATE_KEY, "totalTasks", 1);
 
-            log.info("创建/更新任务成功: taskId={}, catalogId={}, priority={}",
-                taskId, catalogId, priority);
+            log.info("创建/更新任务成功: taskId={}, categoryId={}, level={}, name={}, priority={}",
+                taskId, categoryId, categoryLevel, catalogName, priority);
 
             return taskId;
 
         } catch (Exception e) {
-            log.error("创建任务失败: catalogId={}", catalogId, e);
+            log.error("创建任务失败: categoryId={}", categoryId, e);
             throw new RuntimeException("创建任务失败: " + e.getMessage());
         }
     }
@@ -397,5 +444,164 @@ public class CrawlerTaskQueueService {
         } catch (Exception e) {
             log.error("初始化全局状态失败", e);
         }
+    }
+
+    /**
+     * 智能创建所有分类任务（自动判断二级或三级）
+     * 关键逻辑：如果二级分类下有三级分类，则只为三级创建任务；否则为二级创建任务
+     *
+     * @param priority 任务优先级
+     * @return 创建的任务ID列表
+     */
+    public List<String> createSmartCategoryTasks(int priority) {
+        List<String> taskIds = new ArrayList<>();
+
+        log.info("========== 开始智能创建任务 ==========");
+
+        // 1. 获取所有二级分类
+        List<CategoryLevel2Code> level2Categories = level2Mapper.selectList(null);
+        log.info("共有 {} 个二级分类", level2Categories.size());
+
+        int level2TaskCount = 0;
+        int level3TaskCount = 0;
+
+        // 2. 遍历每个二级分类
+        for (CategoryLevel2Code level2 : level2Categories) {
+            // 3. 检查该二级分类下是否有三级分类
+            List<CategoryLevel3Code> level3List = level3Service.getByLevel2Id(level2.getId());
+
+            if (level3List != null && !level3List.isEmpty()) {
+                // 有三级分类 → 为每个三级分类创建任务
+                log.info("二级分类 [{}] (ID:{}) 下有 {} 个三级分类，为三级创建任务",
+                    level2.getCategoryLevel2Name(),
+                    level2.getId(),
+                    level3List.size());
+
+                for (CategoryLevel3Code level3 : level3List) {
+                    try {
+                        if (!isDuplicated(level3.getId())) {
+                            String taskId = createCategoryTask(level3.getId(), priority);
+                            taskIds.add(taskId);
+                            level3TaskCount++;
+                        }
+                    } catch (Exception e) {
+                        log.error("创建三级分类任务失败: level3Id={}, name={}, error={}",
+                            level3.getId(),
+                            level3.getCategoryLevel3Name(),
+                            e.getMessage());
+                    }
+                }
+            } else {
+                // 没有三级分类 → 为二级分类创建任务
+                try {
+                    if (!isDuplicated(level2.getId())) {
+                        String taskId = createCategoryTask(level2.getId(), priority);
+                        taskIds.add(taskId);
+                        level2TaskCount++;
+                    }
+                } catch (Exception e) {
+                    log.error("创建二级分类任务失败: level2Id={}, name={}, error={}",
+                        level2.getId(),
+                        level2.getCategoryLevel2Name(),
+                        e.getMessage());
+                }
+            }
+        }
+
+        log.info("========== 智能任务创建完成 ==========");
+        log.info("为二级分类创建任务: {} 个", level2TaskCount);
+        log.info("为三级分类创建任务: {} 个", level3TaskCount);
+        log.info("总任务数: {} 个", taskIds.size());
+
+        return taskIds;
+    }
+
+    /**
+     * 智能批量创建任务（用于手动选择分类爬取）
+     * 关键逻辑：对于传入的每个二级分类ID，检查是否有三级分类
+     * - 如果有三级分类，则为所有三级分类创建任务
+     * - 如果没有三级分类，则为该二级分类创建任务
+     *
+     * @param level2CategoryIds 二级分类ID列表（用户选择的分类）
+     * @param priority 任务优先级
+     * @return 创建的任务ID列表
+     */
+    public List<String> createSmartBatchTasks(List<Integer> level2CategoryIds, int priority) {
+        List<String> taskIds = new ArrayList<>();
+
+        log.info("========== 开始智能批量创建任务 ==========");
+        log.info("用户选择了 {} 个二级分类", level2CategoryIds.size());
+
+        int level2TaskCount = 0;
+        int level3TaskCount = 0;
+
+        // 遍历用户选择的每个二级分类
+        for (Integer level2Id : level2CategoryIds) {
+            // 获取二级分类信息
+            CategoryLevel2Code level2 = level2Mapper.selectById(level2Id);
+            if (level2 == null) {
+                log.warn("二级分类不存在: level2Id={}", level2Id);
+                continue;
+            }
+
+            // 检查该二级分类下是否有三级分类
+            List<CategoryLevel3Code> level3List = level3Service.getByLevel2Id(level2Id);
+
+            if (level3List != null && !level3List.isEmpty()) {
+                // 有三级分类 → 为每个三级分类创建任务
+                log.info("二级分类 [{}] (ID:{}) 下有 {} 个三级分类，为三级创建任务",
+                    level2.getCategoryLevel2Name(),
+                    level2Id,
+                    level3List.size());
+
+                for (CategoryLevel3Code level3 : level3List) {
+                    try {
+                        if (!isDuplicated(level3.getId())) {
+                            String taskId = createCategoryTask(level3.getId(), priority);
+                            taskIds.add(taskId);
+                            level3TaskCount++;
+                            log.info("  → 创建三级分类任务: [{}] (catalogId={})",
+                                level3.getCategoryLevel3Name(),
+                                level3.getCatalogId());
+                        } else {
+                            log.debug("  → 跳过已存在的三级分类任务: [{}]",
+                                level3.getCategoryLevel3Name());
+                        }
+                    } catch (Exception e) {
+                        log.error("创建三级分类任务失败: level3Id={}, name={}, error={}",
+                            level3.getId(),
+                            level3.getCategoryLevel3Name(),
+                            e.getMessage());
+                    }
+                }
+            } else {
+                // 没有三级分类 → 为二级分类创建任务
+                log.info("二级分类 [{}] (ID:{}) 下无三级分类，为二级创建任务",
+                    level2.getCategoryLevel2Name(),
+                    level2Id);
+
+                try {
+                    if (!isDuplicated(level2Id)) {
+                        String taskId = createCategoryTask(level2Id, priority);
+                        taskIds.add(taskId);
+                        level2TaskCount++;
+                    } else {
+                        log.debug("  → 跳过已存在的二级分类任务");
+                    }
+                } catch (Exception e) {
+                    log.error("创建二级分类任务失败: level2Id={}, name={}, error={}",
+                        level2Id,
+                        level2.getCategoryLevel2Name(),
+                        e.getMessage());
+                }
+            }
+        }
+
+        log.info("========== 智能批量任务创建完成 ==========");
+        log.info("为二级分类创建任务: {} 个", level2TaskCount);
+        log.info("为三级分类创建任务: {} 个", level3TaskCount);
+        log.info("总任务数: {} 个", taskIds.size());
+
+        return taskIds;
     }
 }

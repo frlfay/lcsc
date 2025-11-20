@@ -35,6 +35,11 @@ public class Product {
     private Integer categoryLevel2Id;
 
     /**
+     * 所属三级分类ID（外键，可为空）
+     */
+    private Integer categoryLevel3Id;
+
+    /**
      * 所属品牌（中文，&替换为空格）
      */
     private String brand;
@@ -231,6 +236,14 @@ public class Product {
 
     public void setCategoryLevel2Id(Integer categoryLevel2Id) {
         this.categoryLevel2Id = categoryLevel2Id;
+    }
+
+    public Integer getCategoryLevel3Id() {
+        return categoryLevel3Id;
+    }
+
+    public void setCategoryLevel3Id(Integer categoryLevel3Id) {
+        this.categoryLevel3Id = categoryLevel3Id;
     }
 
     public String getBrand() {

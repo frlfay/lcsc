@@ -30,9 +30,11 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lcsc.controller.CrawlerWebSocketController;
 import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.CategoryLevel3Code;
 import com.lcsc.entity.Product;
 import com.lcsc.mapper.CategoryLevel2CodeMapper;
 import com.lcsc.mapper.ProductMapper;
+import com.lcsc.service.CategoryLevel3CodeService;
 import com.lcsc.service.ProductService;
 import com.lcsc.service.crawler.FileDownloadService;
 import com.lcsc.service.crawler.LcscApiService;
@@ -65,6 +67,9 @@ public class CategoryCrawlerWorkerPool {
 
     @Autowired
     private CategoryLevel2CodeMapper categoryMapper;
+
+    @Autowired
+    private CategoryLevel3CodeService level3Service;
 
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
@@ -192,7 +197,7 @@ public class CategoryCrawlerWorkerPool {
     }
 
     /**
-     * 执行单个分类爬取任务
+     * 执行单个分类爬取任务（支持二级和三级分类）
      */
     private boolean executeCategoryTask(String taskId, int workerId) {
         try {
@@ -203,51 +208,98 @@ public class CategoryCrawlerWorkerPool {
                 return false;
             }
 
-            Integer catalogId = Integer.valueOf((String) taskMap.get("catalogId"));
+            // 2. 从任务详情中提取信息
+            Integer categoryId = Integer.valueOf((String) taskMap.get("categoryId"));
+            String categoryLevel = (String) taskMap.get("categoryLevel"); // "level2" 或 "level3"
+            String catalogApiId = (String) taskMap.get("catalogApiId"); // 立创API的catalogId
             String catalogName = (String) taskMap.get("catalogName");
             String level1Name = (String) taskMap.get("level1Name");
 
-            log.info("Worker-{} 开始爬取分类: {} > {} (ID: {})",
-                workerId, level1Name, catalogName, catalogId);
+            log.info("Worker-{} 开始爬取分类: {} > {} (级别:{}, DB_ID:{}, API_ID:{})",
+                workerId, level1Name, catalogName, categoryLevel, categoryId, catalogApiId);
 
-            // 3. 更新分类状态
-            CategoryLevel2Code category = categoryMapper.selectById(catalogId);
-            if (category == null) {
-                log.error("Worker-{} 分类不存在: {}", workerId, catalogId);
+            // 3. 根据分类级别更新对应表的状态
+            CategoryLevel2Code level2Category = null;
+            CategoryLevel3Code level3Category = null;
+            Integer categoryLevel1Id = null;
+            Integer categoryLevel2Id = null;
+
+            if ("level2".equals(categoryLevel)) {
+                // 二级分类
+                level2Category = categoryMapper.selectById(categoryId);
+                if (level2Category == null) {
+                    log.error("Worker-{} 二级分类不存在: {}", workerId, categoryId);
+                    return false;
+                }
+                level2Category.setCrawlStatus("PROCESSING");
+                level2Category.setCurrentPage(0);
+                level2Category.setCrawledProducts(0);
+                level2Category.setTotalProducts(0);
+                categoryMapper.updateById(level2Category);
+
+                categoryLevel1Id = level2Category.getCategoryLevel1Id();
+                categoryLevel2Id = level2Category.getId();
+
+            } else if ("level3".equals(categoryLevel)) {
+                // 三级分类
+                level3Category = level3Service.getById(categoryId);
+                if (level3Category == null) {
+                    log.error("Worker-{} 三级分类不存在: {}", workerId, categoryId);
+                    return false;
+                }
+                level3Category.setCrawlStatus("PROCESSING");
+                level3Category.setCurrentPage(0);
+                level3Category.setCrawledProducts(0);
+                level3Category.setTotalProducts(0);
+                level3Service.updateById(level3Category);
+
+                categoryLevel1Id = level3Category.getCategoryLevel1Id();
+                categoryLevel2Id = level3Category.getCategoryLevel2Id();
+
+            } else {
+                log.error("Worker-{} 未知的分类级别: {}", workerId, categoryLevel);
                 return false;
             }
 
-            category.setCrawlStatus("PROCESSING");
-            category.setCurrentPage(0);
-            category.setCrawledProducts(0);
-            category.setTotalProducts(0);
-            categoryMapper.updateById(category);
-
             // 将分类名称映射写入Redis，便于其他组件/下载阶段快速查找
             try {
-                if (category.getCategoryLevel1Id() != null) {
+                if (categoryLevel1Id != null) {
                     redisTemplate.opsForHash().put("crawler:category:names:l1",
-                        String.valueOf(category.getCategoryLevel1Id()), level1Name);
+                        String.valueOf(categoryLevel1Id), level1Name);
                 }
-                redisTemplate.opsForHash().put("crawler:category:names:l2",
-                    String.valueOf(category.getId()), catalogName);
+                if (categoryLevel2Id != null && "level2".equals(categoryLevel)) {
+                    redisTemplate.opsForHash().put("crawler:category:names:l2",
+                        String.valueOf(categoryLevel2Id), catalogName);
+                } else if (categoryLevel2Id != null && level2Category == null) {
+                    // 对于三级分类，也需要获取二级分类名称
+                    CategoryLevel2Code parentLevel2 = categoryMapper.selectById(categoryLevel2Id);
+                    if (parentLevel2 != null) {
+                        redisTemplate.opsForHash().put("crawler:category:names:l2",
+                            String.valueOf(categoryLevel2Id), parentLevel2.getCategoryLevel2Name());
+                    }
+                }
+                if ("level3".equals(categoryLevel)) {
+                    redisTemplate.opsForHash().put("crawler:category:names:l3",
+                        String.valueOf(categoryId), catalogName);
+                }
             } catch (Exception e) {
-                log.warn("写入分类名称映射到Redis失败: l1Id={}, l2Id={}, err={}",
-                    category.getCategoryLevel1Id(), category.getId(), e.getMessage());
+                log.warn("写入分类名称映射到Redis失败: categoryId={}, err={}",
+                    categoryId, e.getMessage());
             }
 
             // 4. 推送任务开始事件
             broadcastWebSocket("TASK_START", Map.of(
                 "taskId", taskId,
-                "catalogId", catalogId,
+                "catalogId", categoryId,
                 "catalogName", catalogName,
                 "level1Name", level1Name,
+                "categoryLevel", categoryLevel,
                 "workerId", workerId
             ));
 
-            // 5. 第一次请求，获取总页数和总产品数
+            // 5. 第一次请求，获取总页数和总产品数（使用立创API的catalogId）
             Map<String, Object> filterParams = new HashMap<>();
-            filterParams.put("catalogIdList", List.of(category.getCatalogId())); // 使用立创API的catalogId
+            filterParams.put("catalogIdList", List.of(catalogApiId));
             filterParams.put("currentPage", 1);
             filterParams.put("pageSize", 25); // 与curl请求一致
 
@@ -255,18 +307,25 @@ public class CategoryCrawlerWorkerPool {
             int totalPages = (int) firstPage.get("totalPages");
             int totalProducts = (int) firstPage.get("totalRows");
 
-            log.info("Worker-{} 分类 {} 总页数: {}, 总产品数: {}",
-                workerId, catalogName, totalPages, totalProducts);
+            log.info("Worker-{} 分类 {} ({}) 总页数: {}, 总产品数: {}",
+                workerId, catalogName, categoryLevel, totalPages, totalProducts);
 
             // 更新任务和分类信息
             redisTemplate.opsForHash().put("crawler:task:" + taskId, "totalPages", totalPages);
             redisTemplate.opsForHash().put("crawler:task:" + taskId, "totalProducts", totalProducts);
-            category.setTotalProducts(totalProducts);
-            categoryMapper.updateById(category);
+
+            if (level2Category != null) {
+                level2Category.setTotalProducts(totalProducts);
+                categoryMapper.updateById(level2Category);
+            } else if (level3Category != null) {
+                level3Category.setTotalProducts(totalProducts);
+                level3Service.updateById(level3Category);
+            }
 
             // 6. 处理第一页
-            Integer categoryLevel1Id = category.getCategoryLevel1Id();
-            int savedCount = processAndSavePageData(catalogId, categoryLevel1Id, level1Name, catalogName, firstPage, workerId);
+            Integer categoryLevel3IdForProduct = "level3".equals(categoryLevel) ? categoryId : null;
+            int savedCount = processAndSavePageData(categoryLevel1Id, categoryLevel2Id, categoryLevel3IdForProduct,
+                level1Name, catalogName, firstPage, workerId);
 
             // 保存第一页的完整原始API响应
             String firstPageRawResponse = (String) firstPage.get("rawResponse");
@@ -282,7 +341,7 @@ public class CategoryCrawlerWorkerPool {
                 log.warn("Worker-{} 第一页原始API响应为空或null，跳过处理", workerId);
             }
 
-            updateProgress(taskId, catalogId, 1, totalPages, savedCount, totalProducts, workerId);
+            updateProgress(taskId, categoryId, 1, totalPages, savedCount, totalProducts, workerId);
 
             int totalSaved = savedCount;
 
@@ -293,17 +352,31 @@ public class CategoryCrawlerWorkerPool {
                     log.warn("Worker-{} 检测到停止信号，中断爬取: {}", workerId, catalogName);
                     // 停止时，如果已经爬取了部分数据，标记为已完成；否则标记为失败
                     if (totalSaved > 0) {
-                        category.setCrawlStatus("COMPLETED");
-                        category.setCrawlProgress(100);
-                        category.setCrawledProducts(totalSaved);
-                        category.setLastCrawlTime(LocalDateTime.now());
-                        categoryMapper.updateById(category);
+                        if (level2Category != null) {
+                            level2Category.setCrawlStatus("COMPLETED");
+                            level2Category.setCrawlProgress(100);
+                            level2Category.setCrawledProducts(totalSaved);
+                            level2Category.setLastCrawlTime(LocalDateTime.now());
+                            categoryMapper.updateById(level2Category);
+                        } else if (level3Category != null) {
+                            level3Category.setCrawlStatus("COMPLETED");
+                            level3Category.setCrawlProgress(100);
+                            level3Category.setCrawledProducts(totalSaved);
+                            level3Category.setLastCrawlTime(LocalDateTime.now());
+                            level3Service.updateById(level3Category);
+                        }
                         log.info("Worker-{} 已停止，但已爬取 {} 个产品，标记分类为已完成", workerId, totalSaved);
                         return true;  // 返回true，因为已有数据
                     } else {
-                        category.setCrawlStatus("STOPPED");
-                        category.setCrawlProgress(0);
-                        categoryMapper.updateById(category);
+                        if (level2Category != null) {
+                            level2Category.setCrawlStatus("STOPPED");
+                            level2Category.setCrawlProgress(0);
+                            categoryMapper.updateById(level2Category);
+                        } else if (level3Category != null) {
+                            level3Category.setCrawlStatus("STOPPED");
+                            level3Category.setCrawlProgress(0);
+                            level3Service.updateById(level3Category);
+                        }
                         log.info("Worker-{} 已停止，未爬取任何产品，标记分类为已停止", workerId);
                         return false;
                     }
@@ -312,7 +385,8 @@ public class CategoryCrawlerWorkerPool {
                 filterParams.put("currentPage", page);
 
                 Map<String, Object> pageData = apiService.getQueryList(filterParams).join();
-                savedCount = processAndSavePageData(catalogId, categoryLevel1Id, level1Name, catalogName, pageData, workerId);
+                savedCount = processAndSavePageData(categoryLevel1Id, categoryLevel2Id, categoryLevel3IdForProduct,
+                    level1Name, catalogName, pageData, workerId);
 
                 // 保存完整的原始API响应
                 String rawResponse = (String) pageData.get("rawResponse");
@@ -330,18 +404,19 @@ public class CategoryCrawlerWorkerPool {
 
                 totalSaved += savedCount;
 
-                updateProgress(taskId, catalogId, page, totalPages, totalSaved, totalProducts, workerId);
+                updateProgress(taskId, categoryId, page, totalPages, totalSaved, totalProducts, workerId);
 
                 // 推送进度
                 int progress = (page * 100) / totalPages;
                 broadcastWebSocket("PROGRESS_UPDATE", Map.of(
-                    "catalogId", catalogId,
+                    "catalogId", categoryId,
                     "catalogName", catalogName,
                     "currentPage", page,
                     "totalPages", totalPages,
                     "progress", progress,
                     "crawledProducts", totalSaved,
                     "totalProducts", totalProducts,
+                    "categoryLevel", categoryLevel,
                     "workerId", workerId
                 ));
 
@@ -350,23 +425,33 @@ public class CategoryCrawlerWorkerPool {
             }
 
             // 8. 完成
-            category.setCrawlStatus("COMPLETED");
-            category.setCrawlProgress(100);
-            category.setCrawledProducts(totalSaved);
-            category.setLastCrawlTime(LocalDateTime.now());
-            categoryMapper.updateById(category);
+            if (level2Category != null) {
+                level2Category.setCrawlStatus("COMPLETED");
+                level2Category.setCrawlProgress(100);
+                level2Category.setCrawledProducts(totalSaved);
+                level2Category.setLastCrawlTime(LocalDateTime.now());
+                categoryMapper.updateById(level2Category);
+            } else if (level3Category != null) {
+                level3Category.setCrawlStatus("COMPLETED");
+                level3Category.setCrawlProgress(100);
+                level3Category.setCrawledProducts(totalSaved);
+                level3Category.setLastCrawlTime(LocalDateTime.now());
+                level3Service.updateById(level3Category);
+            }
 
             // 9. 推送完成事件
             broadcastWebSocket("TASK_COMPLETE", Map.of(
                 "taskId", taskId,
-                "catalogId", catalogId,
+                "catalogId", categoryId,
                 "catalogName", catalogName,
+                "categoryLevel", categoryLevel,
                 "success", true,
                 "totalProducts", totalSaved,
                 "workerId", workerId
             ));
 
-            log.info("Worker-{} 分类爬取完成: {} (产品数: {})", workerId, catalogName, totalSaved);
+            log.info("Worker-{} 分类爬取完成: {} ({}) (产品数: {})",
+                workerId, catalogName, categoryLevel, totalSaved);
             return true;
 
         } catch (Exception e) {
@@ -389,9 +474,10 @@ public class CategoryCrawlerWorkerPool {
     }
 
     /**
-     * 处理并保存页面数据
+     * 处理并保存页面数据（支持三级分类）
      */
-    private int processAndSavePageData(Integer catalogId, Integer categoryLevel1Id, String level1Name, String catalogName, Map<String, Object> pageData, int workerId) {
+    private int processAndSavePageData(Integer categoryLevel1Id, Integer categoryLevel2Id, Integer categoryLevel3Id,
+                                       String level1Name, String catalogName, Map<String, Object> pageData, int workerId) {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> products = (List<Map<String, Object>>) pageData.get("dataList");
 
@@ -402,7 +488,8 @@ public class CategoryCrawlerWorkerPool {
         int savedCount = 0;
         for (Map<String, Object> productData : products) {
             try {
-                Product product = convertToProduct(productData, catalogId, categoryLevel1Id, level1Name, catalogName);
+                Product product = convertToProduct(productData, categoryLevel1Id, categoryLevel2Id, categoryLevel3Id,
+                    level1Name, catalogName);
                 boolean saved = productService.saveOrUpdateProduct(product);
                 if (saved) {
                     savedCount++;
@@ -455,18 +542,26 @@ public class CategoryCrawlerWorkerPool {
     }
 
     /**
-     * 转换产品数据（支持多图片下载）
+     * 转换产品数据（支持多图片下载和三级分类）
      */
-    private Product convertToProduct(Map<String, Object> productData, Integer catalogId, Integer categoryLevel1Id, String level1Name, String catalogName) {
+    private Product convertToProduct(Map<String, Object> productData, Integer categoryLevel1Id, Integer categoryLevel2Id, Integer categoryLevel3Id,
+                                     String level1Name, String catalogName) {
         Product product = new Product();
 
         product.setProductCode((String) productData.get("productCode"));
         product.setCategoryLevel1Id(categoryLevel1Id);
-        product.setCategoryLevel2Id(catalogId);
+        product.setCategoryLevel2Id(categoryLevel2Id);
+        product.setCategoryLevel3Id(categoryLevel3Id);  // 新增：设置三级分类ID
 
         // 同步填充分类名称（便于前端展示及导出）
         product.setCategoryLevel1Name(level1Name);
-        product.setCategoryLevel2Name(catalogName);
+        // 如果是三级分类任务，catalogName是三级分类名称
+        if (categoryLevel3Id != null) {
+            // TODO: 可能需要同时保存二级分类名称
+            product.setCategoryLevel2Name(catalogName);
+        } else {
+            product.setCategoryLevel2Name(catalogName);
+        }
 
         String brandNameEn = (String) productData.get("brandNameEn");
         if (brandNameEn != null) {

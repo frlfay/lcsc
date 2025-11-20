@@ -142,32 +142,20 @@ public class CrawlerControllerV3 {
             queueService.clearAllQueues();
             queueService.initializeState();
 
-            // 3. 获取所有二级分类
-            List<CategoryLevel2Code> categories = syncService.getAllLevel2Categories();
-            if (categories.isEmpty()) {
-                return Result.error("没有可爬取的分类");
-            }
-
-            List<Integer> catalogIds = categories.stream()
-                .map(CategoryLevel2Code::getId)
-                .collect(Collectors.toList());
-
-            log.info("准备创建任务: 分类总数={}", catalogIds.size());
-
-            // 4. 批量创建任务（优先级=1，自动）
-            List<String> taskIds = queueService.createBatchTasks(catalogIds,
+            // 3. 智能创建任务（自动判断二级或三级分类）
+            log.info("开始智能创建任务...");
+            List<String> taskIds = queueService.createSmartCategoryTasks(
                 CrawlerTaskQueueService.PRIORITY_AUTO);
 
             log.info("任务创建完成: 成功创建={} 个", taskIds.size());
 
-            // 5. 启动Worker池
+            // 4. 启动Worker池
             workerPool.start();
 
             Map<String, Object> result = Map.of(
                 "success", true,
-                "totalCategories", categories.size(),
                 "createdTasks", taskIds.size(),
-                "message", "全量爬取已启动"
+                "message", "全量爬取已启动（支持三级分类）"
             );
 
             log.info("========== 全量爬取启动完成 ==========");
@@ -400,8 +388,8 @@ public class CrawlerControllerV3 {
     }
 
     /**
-     * 批量爬取指定分类
-     * @param catalogIds 分类ID列表
+     * 批量爬取指定分类（智能支持三级分类）
+     * @param catalogIds 二级分类ID列表
      */
     @PostMapping("/start-batch")
     public Result<Map<String, Object>> startBatchCrawl(@RequestBody List<Integer> catalogIds) {
@@ -417,8 +405,9 @@ public class CrawlerControllerV3 {
                 return Result.error("请先同步分类信息");
             }
 
-            // 2. 批量创建任务（优先级=5，手动批量）
-            List<String> taskIds = queueService.createBatchTasks(catalogIds, 5);
+            // 2. 智能批量创建任务（优先级=5，手动批量）
+            // 自动判断每个二级分类是否有三级分类，并创建相应的任务
+            List<String> taskIds = queueService.createSmartBatchTasks(catalogIds, 5);
 
             log.info("批量任务创建完成: 成功创建={} 个", taskIds.size());
 
@@ -432,7 +421,7 @@ public class CrawlerControllerV3 {
                 "success", true,
                 "totalCategories", catalogIds.size(),
                 "createdTasks", taskIds.size(),
-                "message", "批量爬取任务已创建"
+                "message", "批量爬取任务已创建（支持三级分类）"
             );
 
             return Result.success(result);
