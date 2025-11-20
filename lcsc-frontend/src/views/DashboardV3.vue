@@ -147,6 +147,16 @@
             <template #icon><StopOutlined /></template>
             停止爬虫
           </a-button>
+          <a-button
+            v-if="selectedCategories.length > 0 && !isRunning"
+            size="large"
+            class="ml-3"
+            @click="handleClearMemory"
+            title="清除选择记忆"
+          >
+            <template #icon><DeleteOutlined /></template>
+            清除记忆
+          </a-button>
         </a-col>
         <a-col :span="8">
           <a-typography-text type="secondary" style="line-height: 32px; display: block;">
@@ -475,7 +485,8 @@ import {
   ExportOutlined,
   ExclamationCircleOutlined,
   ClockCircleOutlined,
-  PauseCircleOutlined
+  PauseCircleOutlined,
+  DeleteOutlined
 } from '@ant-design/icons-vue'
 import { h } from 'vue'
 import CategoryTreeSelector from '@/components/CategoryTreeSelector.vue'
@@ -493,6 +504,9 @@ import {
 } from '@/api/product'
 
 const router = useRouter()
+
+// localStorage 键名常量
+const STORAGE_KEY = 'lcsc_crawler_selected_categories'
 
 // 响应式数据
 const syncLoading = ref(false)
@@ -758,6 +772,8 @@ const handleBatchExport = async ({ key }: { key: string }) => {
 // 树形选择器更新选中项
 const handleTreeSelectionChange = (selectedIds: number[]) => {
   selectedCategories.value = selectedIds
+  // 保存到 localStorage
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(selectedIds))
 }
 
 const onResultSelectionChange = (selectedRowKeys: number[]) => {
@@ -786,10 +802,32 @@ const formatDateTime = (dateTime: string) => {
   return new Date(dateTime).toLocaleString('zh-CN')
 }
 
+// 清除选择记忆
+const handleClearMemory = () => {
+  localStorage.removeItem(STORAGE_KEY)
+  selectedCategories.value = []
+  message.success('已清除选择记忆')
+}
+
 // 轮询检查状态
 let statusInterval: any = null
 
 onMounted(() => {
+  // 从 localStorage 恢复上次的选择
+  const savedSelection = localStorage.getItem(STORAGE_KEY)
+  if (savedSelection) {
+    try {
+      const savedIds = JSON.parse(savedSelection)
+      if (Array.isArray(savedIds) && savedIds.length > 0) {
+        selectedCategories.value = savedIds
+        console.log('已恢复上次选择的分类:', savedIds.length, '个')
+      }
+    } catch (error) {
+      console.error('恢复选择失败:', error)
+      localStorage.removeItem(STORAGE_KEY)
+    }
+  }
+
   checkSystemStatus()
   loadCategoriesWithStatus()
   loadStoragePaths()
