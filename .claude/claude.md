@@ -617,5 +617,145 @@ public List<Product> crawlProducts(String catalogId, int pageSize) {
 
 ---
 
-*最后更新时间: 2025-11-20*
-*文档版本: v1.0*
+## 十九、P0功能完成记录与经验总结
+
+### ✅ 已完成功能 (2025-11-21)
+
+#### P0-1: 爬虫选区UI升级
+**状态**: ✅ 已完成
+
+**实现内容**:
+- 新增`CategoryTreeSelector.vue`组件，支持一级/二级/三级树形折叠结构
+- DashboardV3.vue集成树形选择器
+- 默认状态：一级分类默认不全选，避免误操作
+
+**关键文件**:
+- `lcsc-frontend/src/components/CategoryTreeSelector.vue`
+- `lcsc-frontend/src/views/DashboardV3.vue`
+
+---
+
+#### P0-2: 爬虫选择记忆功能
+**状态**: ✅ 已完成
+
+**实现内容**:
+- 使用localStorage保存用户选择的分类ID
+- 页面加载时自动恢复上次选择
+- 新增"清除记忆"按钮
+
+**关键文件**:
+- `lcsc-frontend/src/views/DashboardV3.vue` (STORAGE_KEY常量、handleTreeSelectionChange方法)
+
+**⚠️ 遇到的Bug及修复**:
+- **问题**: 重启后端后，之前保存的分类无法创建爬虫任务
+- **根因**: 分类同步使用DELETE+INSERT导致自增ID重置，前端保存的旧ID失效
+- **修复方案**:
+  1. 给`catalog_id`字段添加UNIQUE索引
+  2. CategorySyncService改用UPSERT模式（基于catalog_id判断是否存在）
+- **教训**: **业务标识符(catalog_id)应该有唯一索引，数据同步应使用UPSERT而非DELETE+INSERT**
+
+---
+
+#### P0-3: 三级分类兼容性修复
+**状态**: ✅ 已完成
+
+**实现内容**:
+- 数据库新增`category_level3_codes`表
+- CategorySyncService支持递归解析三级分类
+- CrawlerTaskQueueService智能识别分类级别（二级/三级）
+- CategoryCrawlerWorkerPool支持三级分类爬取
+- Product实体新增`category_level3_id`和`category_level3_name`字段
+- 前端CategoryManagement.vue新增三级分类管理Tab
+- ProductService.enrichCategoryNames方法支持三级分类名称填充
+
+**关键文件**:
+- `lcsc-crawler/src/main/java/com/lcsc/entity/CategoryLevel3Code.java`
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategorySyncService.java`
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CrawlerTaskQueueService.java`
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java`
+- `lcsc-crawler/src/main/java/com/lcsc/entity/Product.java`
+- `lcsc-frontend/src/views/CategoryManagement.vue`
+
+**数据库变更**:
+```sql
+-- 新增三级分类表
+CREATE TABLE category_level3_codes (...)
+
+-- products表新增字段
+ALTER TABLE products ADD COLUMN category_level3_id INT;
+ALTER TABLE products ADD COLUMN category_level3_name VARCHAR(100);
+
+-- 分类表添加catalog_id唯一索引
+ALTER TABLE category_level1_codes ADD UNIQUE KEY uk_catalog_id (catalog_id);
+ALTER TABLE category_level2_codes ADD UNIQUE KEY uk_catalog_id (catalog_id);
+```
+
+---
+
+### 🐛 Bug修复记录
+
+#### Bug-1: 产品图片渲染显示占位符
+**问题描述**: 产品管理页面部分产品图片无法渲染，显示SVG占位符
+
+**根因分析**:
+- 数据库中`product_image_url_big`字段值为`"https:null"`
+- 立创API返回的某些产品图片URL字段是字符串`"null"`
+- `normalizeAssetUrl`方法未过滤这种情况，直接拼接成`"https:null"`
+
+**修复方案**:
+```java
+// CategoryCrawlerWorkerPool.java - normalizeAssetUrl方法
+// 过滤掉包含"null"字符串的URL
+if (trimmed.equalsIgnoreCase("null") || trimmed.contains(":null")) {
+    return null;
+}
+```
+
+**数据修复SQL**:
+```sql
+UPDATE products
+SET product_image_url_big = NULL, image_name = NULL
+WHERE product_image_url_big LIKE '%:null%' OR product_image_url_big = 'null';
+```
+
+**教训**: **处理外部API数据时，要考虑各种边界情况，包括字符串"null"**
+
+---
+
+### 📝 开发经验总结
+
+#### 1. 数据同步设计原则
+- **使用UPSERT而非DELETE+INSERT**: 保持主键ID稳定，避免关联数据失效
+- **业务标识符添加唯一索引**: 如`catalog_id`，便于基于业务ID查询和更新
+- **区分自增ID和业务ID**: 自增ID用于内部关联，业务ID用于外部标识
+
+#### 2. 外部API数据处理
+- **字符串"null"检查**: API可能返回字符串"null"而非null对象
+- **URL格式验证**: 检查URL是否有效，避免无效URL进入数据库
+- **数据清洗**: 在保存前对数据进行清洗和验证
+
+#### 3. 前端状态持久化
+- **localStorage保存业务ID**: 如果保存数据库自增ID，需确保后端ID稳定
+- **状态恢复验证**: 恢复状态时验证数据有效性，处理数据失效情况
+
+#### 4. 数据库Schema变更
+- **SQL脚本统一管理**: 所有变更写入`lcsc_full_schema.sql`
+- **数据库操作由用户手动执行**: 避免自动执行敏感操作
+- **考虑数据迁移**: 新增字段时考虑现有数据的兼容性
+
+---
+
+### 📋 待完成功能 (P0剩余)
+
+| 序号 | 功能 | 状态 | 备注 |
+|-----|------|------|------|
+| P0-4 | 突破5000条列表限制 | ⏳ 待开发 | 通过筛选参数切片 |
+| P0-5 | 分类名称持久化修复 | ⏳ 待开发 | source_name + custom_name |
+| P0-6 | 价格阶梯扩展(6级) | ⏳ 待开发 | 数据库+解析逻辑 |
+| P0-7 | 图片命名与逻辑重构 | ⏳ 待开发 | 编号_图类.jpg |
+| P0-8 | PDF命名与开关 | ⏳ 待开发 | 产品编号.pdf + 开关配置 |
+
+---
+
+*最后更新时间: 2025-11-21*
+*文档版本: v1.1*
