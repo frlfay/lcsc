@@ -4,6 +4,7 @@ import ProductManagement from '@/views/ProductManagement.vue'
 import ShopManagement from '@/views/ShopManagement.vue'
 import CategoryManagement from '@/views/CategoryManagement.vue'
 import ImageManagement from '@/views/ImageManagement.vue'
+import AdvancedExport from '@/views/AdvancedExport.vue'
 import DataVisualization from '@/views/DataVisualization.vue'
 
 const routes = [
@@ -35,6 +36,11 @@ const routes = [
     path: '/images',
     name: 'ImageManagement',
     component: ImageManagement
+  },
+  {
+    path: '/export',
+    name: 'AdvancedExport',
+    component: AdvancedExport
   },
   {
     path: '/product-resources',

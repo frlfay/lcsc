@@ -44,6 +44,12 @@
                 </template>
                 图片管理
               </a-menu-item>
+              <a-menu-item key="/export">
+                <template #icon>
+                  <CloudDownloadOutlined />
+                </template>
+                高级导出
+              </a-menu-item>
 <!--              <a-menu-item key="/product-resources">-->
 <!--                <template #icon>-->
 <!--                  <FileImageOutlined />-->

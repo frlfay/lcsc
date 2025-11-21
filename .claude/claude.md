@@ -1171,5 +1171,162 @@ image_links表支持 One-to-Many 关系：
 
 ---
 
+## 二十一、P2功能完成记录
+
+### ✅ 已完成功能 (2025-11-21)
+
+#### P2-1: 高级导出独立模块
+**状态**: ✅ 已完成
+
+**需求描述**:
+- 独立配置页面，支持多维度筛选导出
+- 筛选维度：店铺选择、分类筛选、品牌筛选、关键词搜索、价格折扣设置
+- 导出内容：聚合数据（店铺运费模板、分类码、自定义图片链接、基础产品信息、阶梯价格）
+
+**实现方案**:
+
+**后端架构**:
+- **DTO**: [AdvancedExportRequest.java](lcsc-crawler/src/main/java/com/lcsc/dto/AdvancedExportRequest.java)
+  - shopIds: 店铺ID列表
+  - categoryIds: 分类ID列表（二级/三级）
+  - brands: 品牌列表
+  - keyword: 关键词搜索
+  - discountRate: 折扣率（如0.9表示9折）
+  - includeImageLinks: 是否包含图片链接
+  - includeLadderPrices: 是否包含阶梯价格
+
+- **Service**: [AdvancedExportService.java](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java)
+  - `getExportPreview()`: 预览统计信息（产品数、店铺数、分类数、品牌数）
+  - `generateExport()`: 生成Excel工作簿
+  - 动态列生成：基础列 + 阶梯价格列(可选) + 店铺列(运费模板+图片链接)
+
+- **Controller**: [AdvancedExportController.java](lcsc-crawler/src/main/java/com/lcsc/controller/AdvancedExportController.java)
+  - `POST /api/export/preview`: 获取导出预览
+  - `POST /api/export/advanced`: 执行导出，返回Excel字节流
+
+**前端架构**:
+- **API**: [export.ts](lcsc-frontend/src/api/export.ts)
+  - `getExportPreview()`: 调用预览接口
+  - `exportAdvanced()`: 调用导出接口，处理Blob下载
+
+- **页面**: [AdvancedExport.vue](lcsc-frontend/src/views/AdvancedExport.vue)
+  - 店铺多选（a-select mode="multiple"）
+  - 分类树选择（a-tree-select tree-checkable）
+  - 品牌标签输入（a-select mode="tags"）
+  - 关键词搜索（a-input）
+  - 折扣百分比（a-input-number）
+  - 导出选项复选框
+  - 预览统计卡片
+
+**Excel导出格式**:
+```
+| 产品编号 | 品牌 | 型号 | 封装 | 一级分类 | 二级分类 | 库存 | 阶梯1数量 | 阶梯1价格 | ... | 店铺A-运费模板 | 店铺A-图片链接 | 店铺B-运费模板 | ...
+```
+
+**关键文件**:
+- `lcsc-crawler/src/main/java/com/lcsc/dto/AdvancedExportRequest.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/controller/AdvancedExportController.java` (NEW)
+- `lcsc-frontend/src/api/export.ts` (NEW)
+- `lcsc-frontend/src/views/AdvancedExport.vue` (NEW)
+- `lcsc-frontend/src/router/index.ts` (MODIFIED - 添加路由)
+- `lcsc-frontend/src/App.vue` (MODIFIED - 添加菜单项)
+
+**核心逻辑**:
+
+动态Excel列生成 ([AdvancedExportService.java:151-198](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L151-L198)):
+```java
+// 基础列
+String[] baseHeaders = {"产品编号", "品牌", "型号", "封装", "一级分类", "二级分类", "库存"};
+
+// 阶梯价格列（可选）
+if (Boolean.TRUE.equals(request.getIncludeLadderPrices())) {
+    for (int i = 1; i <= 6; i++) {
+        headerRow.createCell(colIndex++).setCellValue("阶梯" + i + "数量");
+        headerRow.createCell(colIndex++).setCellValue("阶梯" + i + "价格");
+    }
+}
+
+// 店铺相关列（动态）
+for (Shop shop : shops) {
+    headerRow.createCell(colIndex++).setCellValue(shop.getShopName() + "-运费模板");
+    if (Boolean.TRUE.equals(request.getIncludeImageLinks())) {
+        headerRow.createCell(colIndex++).setCellValue(shop.getShopName() + "-图片链接");
+    }
+}
+```
+
+价格折扣应用 ([AdvancedExportService.java:308-317](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L308-L317)):
+```java
+private void createPriceCell(Row row, int col, BigDecimal price, BigDecimal discountRate, CellStyle style) {
+    if (price == null) {
+        cell.setCellValue("");
+    } else {
+        BigDecimal discountedPrice = price.multiply(discountRate).setScale(4, RoundingMode.HALF_UP);
+        cell.setCellValue(discountedPrice.doubleValue());
+    }
+}
+```
+
+图片链接Fallback逻辑 ([AdvancedExportService.java:233-244](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L233-L244)):
+```java
+// 优先使用自定义图片链接（image_links表）
+if (product.getImageName() != null && imageLinkMap.containsKey(product.getImageName())) {
+    Map<Integer, String> shopLinks = imageLinkMap.get(product.getImageName());
+    if (shopLinks.containsKey(shop.getId())) {
+        imageLink = shopLinks.get(shop.getId());
+    }
+}
+// Fallback: 如果没有自定义链接，使用立创原始链接
+if ((imageLink == null || imageLink.isEmpty()) && product.getProductImageUrlBig() != null) {
+    imageLink = product.getProductImageUrlBig();
+}
+```
+
+**图片链接来源优先级**：
+1. **优先**：`image_links` 表的自定义链接（平台专属，用户上传到各电商图床后导入）
+2. **备用**：`products.product_image_url_big` 立创原始链接（爬虫已获取，无需额外操作）
+
+---
+
+### 📝 P2开发经验总结
+
+#### 1. Excel导出设计
+- **动态列生成**：根据用户选择动态构建表头和数据列
+- **样式复用**：创建共享的CellStyle对象，避免超出Excel样式限制
+- **内存优化**：大数据量时考虑使用SXSSFWorkbook（流式写入）
+- **折扣计算**：在导出时应用折扣，保留4位小数精度
+
+#### 2. Blob文件下载
+- **responseType**: 请求时设置 `responseType: 'blob'`
+- **文件命名**：前端生成时间戳文件名，与后端保持一致
+- **内存释放**：下载完成后调用 `URL.revokeObjectURL()` 释放内存
+
+#### 3. 树形选择器
+- **SHOW_PARENT策略**：选中子节点时只显示父节点，简化用户体验
+- **selectable属性**：一级分类设为不可选，只允许选择二级/三级分类
+- **值过滤**：buildRequest时过滤掉非数字的key（如`l1_xxx`）
+
+#### 4. 图片链接Fallback策略
+- **多数据源设计**：区分"自定义链接"和"原始链接"
+- **优先级fallback**：优先使用平台专属链接，没有则使用爬虫获取的原始链接
+- **用户体验**：即使未导入自定义链接，也能看到立创原始图片
+- **渐进增强**：用户可以逐步完善自定义链接，不影响现有功能
+
+---
+
+### 📋 P2功能完成情况
+
+| 序号 | 功能 | 状态 | 备注 |
+|-----|------|------|------|
+| P2-1 | 高级导出独立页面 | ✅ 已完成 | 独立配置页+路由+菜单 |
+| P2-1a | 多维度筛选 | ✅ 已完成 | 店铺/分类/品牌/关键词 |
+| P2-1b | 折扣设置 | ✅ 已完成 | 百分比输入，支持1-100% |
+| P2-1c | 聚合数据导出 | ✅ 已完成 | 运费模板+图片链接+阶梯价 |
+| P2-1d | 预览功能 | ✅ 已完成 | 导出前统计产品/店铺/分类/品牌数量 |
+| P2-1e | 图片链接Fallback | ✅ 已完成 | 优先自定义链接，备用立创原始链接 |
+
+---
+
 *最后更新时间: 2025-11-21*
-*文档版本: v1.2*
+*文档版本: v1.3*
