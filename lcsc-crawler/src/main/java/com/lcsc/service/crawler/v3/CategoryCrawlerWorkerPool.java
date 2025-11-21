@@ -83,6 +83,9 @@ public class CategoryCrawlerWorkerPool {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private TaskSplitService taskSplitService;
+
     @Value("${crawler.storage.base-path}")
     private String storageBasePath;
 
@@ -137,15 +140,53 @@ public class CategoryCrawlerWorkerPool {
      */
     public synchronized void stop() {
         if (!isRunning) {
-            log.warn("Worker池未运行");
-            return;
+            log.warn("Worker池未运行，但仍会清理残留任务");
+        } else {
+            log.info("========== 收到停止信号 ==========");
         }
 
-        log.info("========== 收到停止信号 ==========");
         isRunning = false;
         redisTemplate.opsForHash().put(STATE_KEY, "isRunning", false);
 
         log.info("Worker池将在所有当前任务完成后停止");
+
+        // 等待3秒让Worker线程退出
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        // 清理Redis中残留的"处理中"任务（这些任务被Worker中断，实际已停止）
+        cleanupOrphanedTasks();
+    }
+
+    /**
+     * 清理孤儿任务（停止时残留在Redis中的"处理中"任务）
+     */
+    private void cleanupOrphanedTasks() {
+        try {
+            Set<Object> processingTasks = redisTemplate.opsForSet().members("crawler:queue:processing");
+            if (processingTasks == null || processingTasks.isEmpty()) {
+                log.info("无残留任务需要清理");
+                return;
+            }
+
+            log.warn("发现 {} 个残留任务，开始清理", processingTasks.size());
+
+            for (Object taskIdObj : processingTasks) {
+                String taskId = (String) taskIdObj;
+                log.info("清理残留任务: {}", taskId);
+
+                // 标记任务为停止状态
+                queueService.completeTask(taskId, false, "爬虫已停止");
+            }
+
+            log.info("残留任务清理完成");
+
+        } catch (Exception e) {
+            log.error("清理残留任务失败", e);
+        }
     }
 
     /**
@@ -160,7 +201,19 @@ public class CategoryCrawlerWorkerPool {
                 String taskId = queueService.popNextTask(workerId);
 
                 if (taskId == null) {
-                    // 队列为空，等待
+                    // 队列为空，检查是否所有任务都已完成
+                    Map<String, Object> queueStatus = queueService.getQueueStatus();
+                    int pending = (int) queueStatus.getOrDefault("pending", 0);
+                    int processing = (int) queueStatus.getOrDefault("processing", 0);
+
+                    if (pending == 0 && processing == 0) {
+                        // 所有任务已完成，自动停止爬虫
+                        log.info("========== Worker-{} 检测到所有任务已完成，自动停止爬虫 ==========", workerId);
+                        stop();
+                        break;
+                    }
+
+                    // 仍有任务处理中，继续等待
                     Thread.sleep(2000);
                     continue;
                 }
@@ -313,6 +366,33 @@ public class CategoryCrawlerWorkerPool {
             filterParams.put("currentPage", 1);
             filterParams.put("pageSize", 25); // 与curl请求一致
 
+            // ====== 子任务筛选参数预处理 ======
+            // 检查是否是子任务，如果是则在第一次请求前就添加品牌筛选参数
+            String isSubTask = (String) taskMap.get("isSubTask");
+            boolean isSubTaskFlag = "true".equals(isSubTask);
+
+            if (isSubTaskFlag) {
+                log.info("Worker-{} 当前是子任务，品牌={}, 预期产品数={}",
+                        workerId,
+                        taskMap.get("brandName"),
+                        taskMap.get("expectedCount"));
+
+                // 子任务需要添加品牌筛选参数
+                String filterParamsJson = (String) taskMap.get("filterParams");
+                if (filterParamsJson != null && !filterParamsJson.isEmpty()) {
+                    try {
+                        // 解析filterParams并添加到API请求参数中
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> additionalFilters = objectMapper.readValue(
+                                filterParamsJson, HashMap.class);
+                        filterParams.putAll(additionalFilters);
+                        log.info("Worker-{} 子任务已添加品牌筛选参数: {}", workerId, additionalFilters);
+                    } catch (Exception e) {
+                        log.error("Worker-{} 解析filterParams失败: {}", workerId, e.getMessage());
+                    }
+                }
+            }
+
             Map<String, Object> firstPage = apiService.getQueryList(filterParams).join();
             int totalPages = (int) firstPage.get("totalPages");
             int totalProducts = (int) firstPage.get("totalRows");
@@ -330,6 +410,81 @@ public class CategoryCrawlerWorkerPool {
             } else if (level3Category != null) {
                 level3Category.setTotalProducts(totalProducts);
                 level3Service.updateById(level3Category);
+            }
+
+            // ====== 拆分检测逻辑：突破5000条限制 ======
+            // 检查是否需要拆分（子任务不再拆分）
+            if (!isSubTaskFlag && taskSplitService.needSplit(totalProducts)) {
+                log.warn("Worker-{} 分类 {} 产品总数 {} 超过限制，启动品牌拆分策略",
+                        workerId, catalogName, totalProducts);
+
+                try {
+                    // 3. 获取品牌列表
+                    com.lcsc.dto.BrandSplitUnit[] brandUnits = taskSplitService.splitByBrand(
+                            catalogApiId, catalogName).toArray(new com.lcsc.dto.BrandSplitUnit[0]);
+
+                    if (brandUnits.length == 0) {
+                        log.error("Worker-{} 品牌拆分失败：未找到任何品牌，继续正常爬取", workerId);
+                    } else {
+                        // 4. 为每个品牌创建子任务
+                        int createdCount = 0;
+                        for (com.lcsc.dto.BrandSplitUnit brandUnit : brandUnits) {
+                            try {
+                                queueService.createBrandFilteredTask(
+                                        taskId,                                // parentTaskId
+                                        categoryId,                            // categoryId
+                                        categoryLevel,                         // categoryLevel
+                                        catalogApiId,                          // catalogApiId
+                                        catalogName,                           // catalogName
+                                        brandUnit.getBrandId(),                // brandId
+                                        brandUnit.getBrandName(),              // brandName
+                                        brandUnit.getProductCount(),           // expectedCount
+                                        categoryLevel1Id,                      // level1Id
+                                        level1Name,                            // level1Name
+                                        categoryLevel2Id,                      // level2Id (可能为null)
+                                        Integer.parseInt(taskMap.get("priority").toString()) // priority
+                                );
+                                createdCount++;
+                            } catch (Exception e) {
+                                log.error("Worker-{} 创建品牌子任务失败: brand={}, error={}",
+                                        workerId, brandUnit.getBrandName(), e.getMessage());
+                            }
+                        }
+
+                        // 5. 标记父任务为"已拆分"状态
+                        redisTemplate.opsForHash().put("crawler:task:" + taskId, "status", "SPLIT");
+                        redisTemplate.opsForHash().put("crawler:task:" + taskId, "splitCount", String.valueOf(createdCount));
+
+                        log.info("Worker-{} 任务拆分完成: 父任务={}, 创建子任务={}个, 总预期产品数={}",
+                                workerId, taskId, createdCount, totalProducts);
+
+                        // 6. 推送拆分事件到前端
+                        broadcastWebSocket("TASK_SPLIT", Map.of(
+                                "taskId", taskId,
+                                "catalogName", catalogName,
+                                "totalProducts", totalProducts,
+                                "splitCount", createdCount,
+                                "brandUnits", java.util.Arrays.stream(brandUnits)
+                                        .limit(10) // 只显示前10个品牌
+                                        .map(u -> Map.of(
+                                                "brandName", u.getBrandName(),
+                                                "productCount", u.getProductCount()
+                                        ))
+                                        .toArray()
+                        ));
+
+                        // 7. 完成父任务（状态为SPLIT）
+                        queueService.completeTask(taskId, true, null);
+
+                        // 8. 返回true，结束当前任务
+                        log.info("Worker-{} 任务已拆分，结束父任务执行", workerId);
+                        return true;
+                    }
+
+                } catch (Exception e) {
+                    log.error("Worker-{} 品牌拆分过程失败: {}, 继续正常爬取", workerId, e.getMessage(), e);
+                    // 拆分失败则继续正常爬取
+                }
             }
 
             // 6. 处理第一页

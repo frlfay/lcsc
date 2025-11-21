@@ -381,23 +381,60 @@ public class CrawlerTaskQueueService {
             int failed = failedObj != null ? Integer.parseInt(String.valueOf(failedObj)) : 0;
             int total = totalObj != null ? Integer.parseInt(String.valueOf(totalObj)) : 0;
 
-            return Map.of(
-                "pending", pending != null ? pending.intValue() : 0,
-                "processing", processing != null ? processing.intValue() : 0,
-                "completed", completed,
-                "failed", failed,
-                "total", total
-            );
+            // 统计子任务数量
+            int subTaskCount = countSubTasks();
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("pending", pending != null ? pending.intValue() : 0);
+            result.put("processing", processing != null ? processing.intValue() : 0);
+            result.put("completed", completed);
+            result.put("failed", failed);
+            result.put("total", total);
+            result.put("subTaskCount", subTaskCount);
+            return result;
 
         } catch (Exception e) {
             log.error("获取队列状态失败", e);
-            return Map.of(
-                "pending", 0,
-                "processing", 0,
-                "completed", 0,
-                "failed", 0,
-                "total", 0
-            );
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("pending", 0);
+            errorResult.put("processing", 0);
+            errorResult.put("completed", 0);
+            errorResult.put("failed", 0);
+            errorResult.put("total", 0);
+            errorResult.put("subTaskCount", 0);
+            return errorResult;
+        }
+    }
+
+    /**
+     * 统计子任务数量
+     */
+    private int countSubTasks() {
+        try {
+            Set<Object> pendingTasks = redisTemplate.opsForZSet().range(QUEUE_PENDING, 0, -1);
+            Set<Object> processingTasks = redisTemplate.opsForSet().members(QUEUE_PROCESSING);
+
+            int count = 0;
+            if (pendingTasks != null) {
+                for (Object taskId : pendingTasks) {
+                    String isSubTask = (String) redisTemplate.opsForHash().get(TASK_PREFIX + taskId, "isSubTask");
+                    if ("true".equals(isSubTask)) {
+                        count++;
+                    }
+                }
+            }
+            if (processingTasks != null) {
+                for (Object taskId : processingTasks) {
+                    String isSubTask = (String) redisTemplate.opsForHash().get(TASK_PREFIX + taskId, "isSubTask");
+                    if ("true".equals(isSubTask)) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        } catch (Exception e) {
+            log.error("统计子任务数量失败", e);
+            return 0;
         }
     }
 
@@ -514,6 +551,87 @@ public class CrawlerTaskQueueService {
         log.info("总任务数: {} 个", taskIds.size());
 
         return taskIds;
+    }
+
+    /**
+     * 创建品牌筛选子任务（用于突破5000条限制）
+     * @param parentTaskId 父任务ID
+     * @param categoryId 分类ID
+     * @param categoryLevel 分类级别（level2 或 level3）
+     * @param catalogApiId 立创API的catalogId
+     * @param catalogName 分类名称
+     * @param brandId 品牌ID
+     * @param brandName 品牌名称
+     * @param expectedCount 预期产品数量
+     * @param level1Id 一级分类ID
+     * @param level1Name 一级分类名称
+     * @param level2Id 二级分类ID（可选）
+     * @param priority 优先级
+     * @return 任务ID
+     */
+    public String createBrandFilteredTask(
+            String parentTaskId,
+            Integer categoryId,
+            String categoryLevel,
+            String catalogApiId,
+            String catalogName,
+            String brandId,
+            String brandName,
+            int expectedCount,
+            Integer level1Id,
+            String level1Name,
+            Integer level2Id,
+            int priority) {
+        try {
+            // 1. 生成子任务ID
+            String taskId = "TASK_" + categoryId + "_BRAND_" + brandId + "_" + System.currentTimeMillis();
+
+            // 2. 构建筛选参数（JSON格式）
+            String filterParams = String.format("{\"brandIdList\":[\"%s\"]}", brandId);
+
+            // 3. 构建任务详情
+            Map<String, String> taskDetail = new HashMap<>();
+            taskDetail.put("categoryId", String.valueOf(categoryId));
+            taskDetail.put("categoryLevel", categoryLevel);
+            taskDetail.put("catalogApiId", catalogApiId);
+            taskDetail.put("catalogName", catalogName);
+            taskDetail.put("level1Id", String.valueOf(level1Id));
+            taskDetail.put("level1Name", level1Name);
+            if (level2Id != null) {
+                taskDetail.put("level2Id", String.valueOf(level2Id));
+            }
+            taskDetail.put("priority", String.valueOf(priority));
+            taskDetail.put("status", "PENDING");
+            taskDetail.put("createdAt", LocalDateTime.now().toString());
+
+            // 4. 添加拆分相关字段
+            taskDetail.put("isSubTask", "true");
+            taskDetail.put("parentTaskId", parentTaskId);
+            taskDetail.put("splitStrategy", "BRAND");
+            taskDetail.put("filterParams", filterParams);
+            taskDetail.put("brandId", brandId);
+            taskDetail.put("brandName", brandName);
+            taskDetail.put("expectedCount", String.valueOf(expectedCount));
+
+            // 5. 保存任务到Redis
+            redisTemplate.opsForHash().putAll(TASK_PREFIX + taskId, taskDetail);
+
+            // 6. 加入优先级队列（子任务继承父任务优先级）
+            double score = priority * 1_000_000_000_000_000L + System.currentTimeMillis();
+            redisTemplate.opsForZSet().add(QUEUE_PENDING, taskId, score);
+
+            // 7. 更新全局统计
+            redisTemplate.opsForHash().increment(STATE_KEY, "totalTasks", 1);
+
+            log.info("创建品牌筛选子任务成功: taskId={}, parentTaskId={}, brand={}, expectedCount={}",
+                    taskId, parentTaskId, brandName, expectedCount);
+
+            return taskId;
+
+        } catch (Exception e) {
+            log.error("创建品牌筛选子任务失败: parentTaskId={}, brandId={}", parentTaskId, brandId, e);
+            throw new RuntimeException("创建品牌筛选子任务失败: " + e.getMessage());
+        }
     }
 
     /**

@@ -167,68 +167,100 @@
     </a-card>
 
     <!-- 面板3: 爬取进度监控 -->
-<!--    <a-card-->
-<!--      v-if="isRunning || queueStatus.completed > 0"-->
-<!--      class="panel-card mb-4"-->
-<!--      title="📊 爬取进度监控"-->
-<!--    >-->
-<!--      &lt;!&ndash; 队列状态卡片 &ndash;&gt;-->
-<!--      <a-row :gutter="16" class="mb-3">-->
-<!--        <a-col :span="6">-->
-<!--          <a-card size="small" class="queue-stat-card">-->
-<!--            <a-statistic-->
-<!--              title="待处理"-->
-<!--              :value="queueStatus.pending"-->
-<!--              prefix="📋"-->
-<!--              :value-style="{ color: '#1890ff' }"-->
-<!--            />-->
-<!--          </a-card>-->
-<!--        </a-col>-->
-<!--        <a-col :span="6">-->
-<!--          <a-card size="small" class="queue-stat-card">-->
-<!--            <a-statistic-->
-<!--              title="处理中"-->
-<!--              :value="queueStatus.processing"-->
-<!--              prefix="⚙️"-->
-<!--              :value-style="{ color: '#faad14' }"-->
-<!--            />-->
-<!--          </a-card>-->
-<!--        </a-col>-->
-<!--        <a-col :span="6">-->
-<!--          <a-card size="small" class="queue-stat-card">-->
-<!--            <a-statistic-->
-<!--              title="已完成"-->
-<!--              :value="queueStatus.completed"-->
-<!--              prefix="✅"-->
-<!--              :value-style="{ color: '#52c41a' }"-->
-<!--            />-->
-<!--          </a-card>-->
-<!--        </a-col>-->
-<!--        <a-col :span="6">-->
-<!--          <a-card size="small" class="queue-stat-card">-->
-<!--            <a-statistic-->
-<!--              title="失败"-->
-<!--              :value="queueStatus.failed"-->
-<!--              prefix="❌"-->
-<!--              :value-style="{ color: '#ff4d4f' }"-->
-<!--            />-->
-<!--          </a-card>-->
-<!--        </a-col>-->
-<!--      </a-row>-->
+    <a-card
+      v-if="isRunning || queueStatus.completed > 0"
+      class="panel-card mb-4"
+      title="📊 爬取进度监控"
+    >
+      <!-- 队列状态卡片 -->
+      <a-row :gutter="16" class="mb-3">
+        <a-col :span="6">
+          <a-card size="small" class="queue-stat-card">
+            <a-statistic
+              title="待处理"
+              :value="queueStatus.pending"
+              prefix="📋"
+              :value-style="{ color: '#1890ff' }"
+            />
+            <div v-if="queueStatus.subTaskCount > 0" class="text-xs text-orange-500 mt-1">
+              含 {{ queueStatus.subTaskCount }} 个品牌子任务
+            </div>
+          </a-card>
+        </a-col>
+        <a-col :span="6">
+          <a-card size="small" class="queue-stat-card">
+            <a-statistic
+              title="处理中"
+              :value="queueStatus.processing"
+              prefix="⚙️"
+              :value-style="{ color: '#faad14' }"
+            />
+          </a-card>
+        </a-col>
+        <a-col :span="6">
+          <a-card size="small" class="queue-stat-card">
+            <a-statistic
+              title="已完成"
+              :value="queueStatus.completed"
+              prefix="✅"
+              :value-style="{ color: '#52c41a' }"
+            />
+          </a-card>
+        </a-col>
+        <a-col :span="6">
+          <a-card size="small" class="queue-stat-card">
+            <a-statistic
+              title="失败"
+              :value="queueStatus.failed"
+              prefix="❌"
+              :value-style="{ color: '#ff4d4f' }"
+            />
+          </a-card>
+        </a-col>
+      </a-row>
 
-<!--      &lt;!&ndash; 进度条 &ndash;&gt;-->
-<!--      <a-progress-->
-<!--        :percent="overallProgress"-->
-<!--        :status="overallProgress === 100 ? 'success' : 'active'"-->
-<!--        :show-info="true"-->
-<!--      >-->
-<!--        <template #format="percent">-->
-<!--          {{ percent }}% ({{ queueStatus.completed }} / {{ queueStatus.total }})-->
-<!--        </template>-->
-<!--      </a-progress>-->
-<!--    </a-card>-->
+      <!-- 进度条 -->
+      <a-progress
+        :percent="overallProgress"
+        :status="overallProgress === 100 ? 'success' : 'active'"
+        :show-info="true"
+      >
+        <template #format="percent">
+          {{ percent }}% ({{ queueStatus.completed }} / {{ queueStatus.total }})
+          <span v-if="queueStatus.subTaskCount > 0" class="text-orange-500 ml-2">
+            (含 {{ queueStatus.subTaskCount }} 个品牌子任务)
+          </span>
+        </template>
+      </a-progress>
 
-    <!-- 面板3: 存储路径信息 -->
+      <!-- 任务拆分提示信息 -->
+      <a-alert
+        v-if="splitTasks.length > 0"
+        type="info"
+        class="mt-3"
+        closable
+        @close="splitTasks = []"
+      >
+        <template #message>
+          <div><strong>🔀 智能任务拆分</strong></div>
+        </template>
+        <template #description>
+          <div v-for="(task, index) in splitTasks.slice(0, 3)" :key="index" class="mb-2">
+            <div><strong>{{ task.catalogName }}</strong> ({{ task.totalProducts }} 个产品)</div>
+            <div class="text-secondary">已拆分为 {{ task.splitCount }} 个品牌子任务</div>
+            <div v-if="task.brands && task.brands.length > 0" class="text-secondary small">
+              包含品牌: {{ task.brands.map((b: any) => b.brandName).join(', ') }}
+              <span v-if="task.splitCount > task.brands.length">等{{ task.splitCount }}个</span>
+            </div>
+          </div>
+          <div v-if="splitTasks.length > 3" class="text-secondary">
+            还有 {{ splitTasks.length - 3 }} 个分类被拆分...
+          </div>
+        </template>
+      </a-alert>
+    </a-card>
+
+    <!-- 面板4: 存储路径信息 -->
     <a-card class="panel-card mb-4" title="💾 存储路径信息">
       <a-row :gutter="16">
         <a-col :span="24" class="mb-3">
@@ -392,12 +424,21 @@
           </template>
         </a-table-column>
 
-        <a-table-column key="totalProducts" title="产品数量" dataIndex="totalProducts" width="120" align="right">
+        <a-table-column key="totalProducts" title="产品数量" dataIndex="totalProducts" width="150" align="right">
           <template #default="{ record }">
-            <a-statistic
-              :value="record.totalProducts"
-              :value-style="{ fontSize: '14px' }"
-            />
+            <a-space direction="vertical" size="small" style="width: 100%">
+              <a-statistic
+                :value="record.totalProducts"
+                :value-style="{
+                  fontSize: '14px',
+                  color: record.totalProducts > 4800 ? '#fa8c16' : undefined
+                }"
+              />
+              <a-tag v-if="record.totalProducts > 4800" color="warning" style="font-size: 11px">
+                <template #icon>🔀</template>
+                将拆分
+              </a-tag>
+            </a-space>
           </template>
         </a-table-column>
 
@@ -530,8 +571,12 @@ const queueStatus = ref({
   processing: 0,
   completed: 0,
   failed: 0,
-  total: 0
+  total: 0,
+  subTaskCount: 0
 })
+
+// 任务拆分记录
+const splitTasks = ref<any[]>([])
 
 const selectedCategories = ref<number[]>([])
 const selectedResultCategories = ref<number[]>([])
