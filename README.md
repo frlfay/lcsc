@@ -96,8 +96,7 @@
 
 #### 1. 克隆项目
 ```bash
-git clone https://github.com/your-repo/lcsc-crawler.git
-cd lcsc-crawler
+git clone git@github.com:frlfay/lcsc.git
 ```
 
 #### 2. 启动基础服务（MySQL + Redis）
@@ -134,7 +133,7 @@ cd lcsc-crawler
 mvnw.cmd spring-boot:run
 
 # macOS/Linux
-./mvnw spring-boot:run
+mvn spring-boot:run
 ```
 
 访问：http://localhost:8080/api/health （应返回 `{"status":"UP"}`）

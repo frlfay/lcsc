@@ -2,11 +2,20 @@ package com.lcsc.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.lcsc.common.Result;
+import com.lcsc.dto.ImageLinkImportResult;
 import com.lcsc.entity.ImageLink;
+import com.lcsc.service.ImageLinkImportService;
 import com.lcsc.service.ImageLinkService;
+import org.apache.poi.ss.usermodel.Workbook;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -23,6 +32,9 @@ public class ImageLinkController {
 
     @Autowired
     private ImageLinkService imageLinkService;
+
+    @Autowired
+    private ImageLinkImportService imageLinkImportService;
 
     // 分页查询图片链接
     @GetMapping("/page")
@@ -197,5 +209,63 @@ public class ImageLinkController {
     public Result<Map<String, Object>> getImageLinkStatistics() {
         long totalCount = imageLinkService.getTotalImageLinkCount();
         return Result.success(Map.of("totalImageLinks", totalCount));
+    }
+
+    /**
+     * 导入Excel文件
+     *
+     * @param file Excel文件
+     * @return 导入结果（成功数、失败数、错误列表）
+     */
+    @PostMapping("/import")
+    public Result<ImageLinkImportResult> importFromExcel(@RequestParam("file") MultipartFile file) {
+        // 验证文件
+        if (file.isEmpty()) {
+            return Result.error("文件不能为空");
+        }
+
+        String filename = file.getOriginalFilename();
+        if (filename == null || (!filename.endsWith(".xlsx") && !filename.endsWith(".xls"))) {
+            return Result.error("文件格式错误，只支持.xlsx或.xls格式");
+        }
+
+        try {
+            ImageLinkImportResult result = imageLinkImportService.importFromExcel(file);
+            return Result.success(result);
+        } catch (Exception e) {
+            return Result.error("导入失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 下载Excel导入模板
+     *
+     * @return Excel模板文件
+     */
+    @GetMapping("/import-template")
+    public ResponseEntity<byte[]> downloadImportTemplate() {
+        try {
+            Workbook workbook = imageLinkImportService.generateTemplate();
+
+            // 将Workbook转换为字节数组
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            workbook.write(outputStream);
+            workbook.close();
+
+            byte[] bytes = outputStream.toByteArray();
+
+            // 设置响应头
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            headers.setContentDispositionFormData("attachment", "image_link_import_template.xlsx");
+            headers.setContentLength(bytes.length);
+
+            return ResponseEntity.ok()
+                    .headers(headers)
+                    .body(bytes);
+
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().build();
+        }
     }
 }

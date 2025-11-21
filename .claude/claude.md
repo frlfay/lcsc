@@ -1033,5 +1033,143 @@ WHERE product_image_url_big LIKE '%:null%' OR product_image_url_big = 'null';
 
 ---
 
+## 二十、P1功能完成记录
+
+### ✅ 已完成功能 (2025-11-21)
+
+#### P1-1: 图片链接管理独立模块 - Excel导入功能
+**状态**: ✅ 已完成
+
+**需求描述**:
+- 支持从本地Excel导入图片链接数据
+- 模板格式：`[店铺名称, 产品编号, 图片名称, 图片链接]`
+- 数据模型：One-to-Many关系（一张图片 → N个店铺 → N条链接）
+
+**实现方案**:
+
+1. **数据模型设计**:
+   - 表结构：`image_links(id, image_name, shop_id, image_link, ...)`
+   - 唯一约束：`UNIQUE KEY (image_name, shop_id)` - 同一图片在同一店铺只能有一条记录
+   - 支持一张图片关联多个店铺，每个店铺有独立链接
+
+2. **后端实现**:
+   - **DTO类**（3个新文件）：
+     - `ImageLinkImportResult.java`: 导入结果（成功数、失败数、错误列表）
+     - `ImageLinkImportError.java`: 错误信息（行号、错误描述）
+     - `ImageLinkImportRow.java`: Excel行数据
+   - **服务层**：`ImageLinkImportService.java`
+     - Excel解析（Apache POI）
+     - 数据验证（必填字段、URL格式、店铺存在性）
+     - 店铺名称自动转换为shopId
+     - UPSERT模式保存（重复数据自动更新）
+     - 模板生成功能
+   - **Controller层**：新增2个API端点
+     - `POST /api/image-links/import` - Excel文件导入
+     - `GET /api/image-links/import-template` - 模板下载
+
+3. **前端实现**:
+   - **类型定义**：`ImageLinkImportResult`, `ImageLinkImportError`
+   - **API层**：`importImageLinksFromExcel()`, `downloadImportTemplate()`
+   - **UI组件**：
+     - 三步骤导入流程（下载模板 → 上传文件 → 导入）
+     - Upload组件支持.xlsx/.xls文件
+     - 实时导入结果展示（成功/失败统计）
+     - 错误详情列表（行号+错误信息）
+   - **路由配置**：`/images` → `ImageManagement`
+   - **菜单配置**：顶部导航添加"图片管理"菜单项
+
+4. **表格显示优化**:
+   - 固定表格布局：`table-layout="fixed"`
+   - 图片链接列自动截断：`ellipsis: true`
+   - 鼠标悬停显示完整链接
+   - 操作列固定右侧
+
+**关键文件**:
+- `lcsc-crawler/src/main/java/com/lcsc/dto/ImageLinkImportResult.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/dto/ImageLinkImportError.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/dto/ImageLinkImportRow.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/service/ImageLinkImportService.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/controller/ImageLinkController.java` (MODIFIED)
+- `lcsc-frontend/src/types/index.ts` (MODIFIED)
+- `lcsc-frontend/src/api/imageLink.ts` (MODIFIED)
+- `lcsc-frontend/src/views/ImageManagement.vue` (MODIFIED)
+- `lcsc-frontend/src/router/index.ts` (MODIFIED)
+- `lcsc-frontend/src/App.vue` (MODIFIED)
+
+**核心代码示例**:
+
+Excel解析逻辑 ([ImageLinkImportService.java](lcsc-crawler/src/main/java/com/lcsc/service/ImageLinkImportService.java)):
+```java
+@Transactional(rollbackFor = Exception.class)
+public ImageLinkImportResult importFromExcel(MultipartFile file) {
+    // 1. 解析Excel行数据
+    // 2. 验证每行（店铺名称、图片名称、图片链接必填；URL格式验证）
+    // 3. 店铺名称 → shopId 转换（缓存避免重复查询）
+    // 4. UPSERT模式保存（基于唯一约束 image_name + shop_id）
+    // 5. 返回导入结果（成功数、失败数、错误详情）
+}
+```
+
+前端Upload组件 ([ImageManagement.vue](lcsc-frontend/src/views/ImageManagement.vue)):
+```vue
+<a-upload
+  :file-list="uploadFileList"
+  :before-upload="beforeUpload"
+  accept=".xlsx,.xls"
+  :max-count="1"
+>
+  <a-button><UploadOutlined /> 选择Excel文件</a-button>
+</a-upload>
+```
+
+**数据模型验证**:
+```
+image_links表支持 One-to-Many 关系：
+┌─────────────────────┐
+│     image_name      │ 一张图片
+└─────────────────────┘
+           │
+           ├──→ shop_id=1 → image_link_1 (店铺A的链接)
+           ├──→ shop_id=2 → image_link_2 (店铺B的链接)
+           └──→ shop_id=3 → image_link_3 (店铺C的链接)
+```
+
+---
+
+### 📝 P1开发经验总结
+
+#### 1. Excel导入最佳实践
+- **模板先行**：提供下载模板功能，明确数据格式要求
+- **渐进式验证**：先验证格式，再验证业务逻辑（如店铺存在性）
+- **详细错误报告**：返回行号+具体错误信息，便于用户定位问题
+- **UPSERT模式**：利用唯一约束实现"存在则更新，不存在则插入"
+
+#### 2. 文件上传处理
+- **前端验证**：beforeUpload中验证文件类型和大小，减少无效请求
+- **阻止自动上传**：`return false` 让用户确认后手动触发上传
+- **FormData传输**：MultipartFile需要使用 `Content-Type: multipart/form-data`
+
+#### 3. 表格显示优化
+- **固定布局**：`table-layout="fixed"` 防止内容撑开列宽
+- **文本截断**：`ellipsis: true` + Tooltip 显示完整内容
+- **固定列**：`fixed: 'right'` 确保操作列始终可见
+
+#### 4. 路由和菜单配置
+- **新页面必须添加路由**：在 `router/index.ts` 中注册
+- **菜单项同步**：在 `App.vue` 中添加对应菜单项
+- **图标导入**：从 `@ant-design/icons-vue` 导入对应图标
+
+---
+
+### 📋 P1功能完成情况
+
+| 序号 | 功能 | 状态 | 备注 |
+|-----|------|------|------|
+| P1-1 | 图片链接管理Excel导入 | ✅ 已完成 | 模板下载+文件上传+错误报告 |
+| P1-1a | One-to-Many数据模型 | ✅ 已完成 | 唯一约束(image_name, shop_id) |
+| P1-1b | 表格显示优化 | ✅ 已完成 | 固定布局+文本截断 |
+
+---
+
 *最后更新时间: 2025-11-21*
-*文档版本: v1.1*
+*文档版本: v1.2*

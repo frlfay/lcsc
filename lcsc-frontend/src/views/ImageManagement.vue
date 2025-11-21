@@ -59,36 +59,36 @@
         :data-source="tableData"
         :loading="loading"
         :pagination="false"
+        :scroll="{ x: 1000 }"
         row-key="id"
+        table-layout="fixed"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'shopName'">
             {{ getShopName(record.shopId) }}
           </template>
           <template v-else-if="column.key === 'imageLink'">
-            <a-typography-text copyable :ellipsis="{ tooltip: record.imageLink }" style="max-width: 200px">
-              {{ record.imageLink }}
-            </a-typography-text>
+            <a-tooltip :title="record.imageLink" placement="topLeft">
+              <a-typography-text
+                copyable
+                class="image-link-text"
+              >
+                {{ record.imageLink }}
+              </a-typography-text>
+            </a-tooltip>
           </template>
           <template v-else-if="column.key === 'preview'">
             <a-button type="link" size="small" @click="previewImage(record)">
               <template #icon><EyeOutlined /></template>
-              预览
             </a-button>
           </template>
           <template v-else-if="column.key === 'createdAt'">
             {{ formatDateTime(record.createdAt) }}
           </template>
           <template v-else-if="column.key === 'action'">
-            <a-space>
-              <a-button size="small" @click="handleEdit(record)">
-                <template #icon><EditOutlined /></template>
-                编辑
-              </a-button>
-              <a-button size="small" danger @click="handleDelete(record)">
-                <template #icon><DeleteOutlined /></template>
-                删除
-              </a-button>
+            <a-space :size="4">
+              <a-button size="small" @click="handleEdit(record)">编辑</a-button>
+              <a-button size="small" danger @click="handleDelete(record)">删除</a-button>
             </a-space>
           </template>
         </template>
@@ -159,46 +159,110 @@
       v-model:open="showBatchImportDialog"
       title="批量导入图片链接"
       width="800px"
-      @ok="handleBatchImport"
+      :footer="null"
+      @cancel="handleImportCancel"
     >
       <div class="import-section">
-        <h4>导入说明</h4>
+        <h4>Excel导入</h4>
         <a-alert
-          message="CSV格式要求：图片名称,店铺ID,图片链接"
+          message="请先下载模板，填写数据后上传Excel文件"
           type="info"
           :closable="false"
           style="margin-bottom: 16px"
         />
-        
-        <a-form-item label="选择店铺">
-          <a-select
-            v-model:value="batchImportShopId"
-            placeholder="选择目标店铺"
-            style="width: 300px"
-          >
-            <a-select-option
-              v-for="item in shopList"
-              :key="item.id"
-              :value="item.id"
+
+        <a-space direction="vertical" :size="16" style="width: 100%">
+          <!-- 步骤1：下载模板 -->
+          <div>
+            <h5>步骤1：下载模板</h5>
+            <a-button type="primary" @click="handleDownloadTemplate">
+              <template #icon><DownloadOutlined /></template>
+              下载Excel模板
+            </a-button>
+          </div>
+
+          <!-- 步骤2：上传文件 -->
+          <div>
+            <h5>步骤2：上传Excel文件</h5>
+            <a-upload
+              :file-list="uploadFileList"
+              :before-upload="beforeUpload"
+              :remove="handleRemoveFile"
+              accept=".xlsx,.xls"
+              :max-count="1"
             >
-              {{ item.shopName }}
-            </a-select-option>
-          </a-select>
-        </a-form-item>
+              <a-button>
+                <template #icon><UploadOutlined /></template>
+                选择Excel文件
+              </a-button>
+            </a-upload>
+            <div class="form-tip" style="margin-top: 8px">
+              支持.xlsx和.xls格式，单次最多上传1个文件
+            </div>
+          </div>
 
-        <a-form-item label="导入数据">
-          <a-textarea
-            v-model:value="batchImportData"
-            :rows="8"
-            placeholder="请粘贴CSV数据，格式：图片名称,店铺ID,图片链接"
-          />
-        </a-form-item>
+          <!-- 步骤3：导入 -->
+          <div>
+            <a-space>
+              <a-button
+                type="primary"
+                :loading="importLoading"
+                :disabled="uploadFileList.length === 0"
+                @click="handleExcelImport"
+              >
+                <template #icon><UploadOutlined /></template>
+                开始导入
+              </a-button>
+              <a-button @click="handleImportCancel">取消</a-button>
+            </a-space>
+          </div>
 
-        <div class="import-example">
-          <h5>示例数据：</h5>
-          <pre>C123456_001.jpg,1,https://example.com/images/C123456_001.jpg
-C123456_002.jpg,1,https://example.com/images/C123456_002.jpg
-C789012_001.jpg,2,https://example.com/images/C789012_001.jpg</pre>
+          <!-- 导入结果 -->
+          <div v-if="importResult" class="import-result">
+            <a-divider>导入结果</a-divider>
+            <a-result
+              :status="importResult.failureCount === 0 ? 'success' : 'warning'"
+              :title="`成功导入 ${importResult.successCount} 条，失败 ${importResult.failureCount} 条`"
+            >
+              <template #extra>
+                <a-space>
+                  <a-button type="primary" @click="handleImportComplete">完成</a-button>
+                  <a-button v-if="importResult.failureCount > 0" @click="showErrorDetails = !showErrorDetails">
+                    {{ showErrorDetails ? '隐藏' : '查看' }}错误详情
+                  </a-button>
+                </a-space>
+              </template>
+            </a-result>
+
+            <!-- 错误详情 -->
+            <div v-if="showErrorDetails && importResult.errors.length > 0" class="error-details">
+              <h5>错误详情：</h5>
+              <a-list
+                size="small"
+                :data-source="importResult.errors"
+                :pagination="{ pageSize: 5 }"
+              >
+                <template #renderItem="{ item }">
+                  <a-list-item>
+                    <strong>第 {{ item.rowNumber }} 行：</strong>
+                    <a-typography-text type="danger">
+                      {{ item.errors.join('; ') }}
+                    </a-typography-text>
+                  </a-list-item>
+                </template>
+              </a-list>
+            </div>
+          </div>
+        </a-space>
+
+        <div class="import-example" style="margin-top: 24px">
+          <h5>Excel格式说明：</h5>
+          <ul style="margin: 8px 0; padding-left: 20px; font-size: 12px">
+            <li>第1列：店铺名称（必填）</li>
+            <li>第2列：产品编号（选填，仅用于参考）</li>
+            <li>第3列：图片名称（必填，如：C123456_front.jpg）</li>
+            <li>第4列：图片链接（必填，需以http://或https://开头）</li>
+          </ul>
         </div>
       </div>
     </a-modal>
@@ -243,16 +307,18 @@ import {
   DownloadOutlined, 
   EyeOutlined 
 } from '@ant-design/icons-vue'
-import { 
-  getImageLinkPage, 
-  addImageLink, 
-  updateImageLink, 
+import {
+  getImageLinkPage,
+  addImageLink,
+  updateImageLink,
   deleteImageLink,
-  saveOrUpdateImageLinkBatch
+  importImageLinksFromExcel,
+  downloadImportTemplate
 } from '@/api/imageLink'
 import { getShopList } from '@/api/shop'
-import type { ImageLink, Shop } from '@/types'
+import type { ImageLink, Shop, ImageLinkImportResult } from '@/types'
 import type { FormInstance } from 'ant-design-vue'
+import type { UploadProps } from 'ant-design-vue'
 
 // 表格列定义
 const columns = [
@@ -260,38 +326,40 @@ const columns = [
     title: 'ID',
     dataIndex: 'id',
     key: 'id',
-    width: 80
+    width: 70
   },
   {
     title: '图片名称',
     dataIndex: 'imageName',
     key: 'imageName',
-    width: 200
+    width: 180,
+    ellipsis: true
   },
   {
     title: '所属店铺',
     key: 'shopName',
-    width: 150
+    width: 120
   },
   {
     title: '图片链接',
     key: 'imageLink',
-    width: 250
+    ellipsis: true
   },
   {
     title: '预览',
     key: 'preview',
-    width: 80
+    width: 70,
+    align: 'center'
   },
   {
     title: '创建时间',
     key: 'createdAt',
-    width: 180
+    width: 160
   },
   {
     title: '操作',
     key: 'action',
-    width: 150,
+    width: 140,
     fixed: 'right'
   }
 ]
@@ -306,8 +374,12 @@ const showPreviewDialog = ref(false)
 const imageLinkFormRef = ref<FormInstance>()
 const previewImageUrl = ref('')
 const previewImageName = ref('')
-const batchImportShopId = ref<number | undefined>()
-const batchImportData = ref('')
+
+// Excel导入相关
+const uploadFileList = ref<UploadProps['fileList']>([])
+const importLoading = ref(false)
+const importResult = ref<ImageLinkImportResult | null>(null)
+const showErrorDetails = ref(false)
 
 const searchForm = reactive({
   imageName: '',
@@ -438,45 +510,85 @@ const handleDelete = async (row: ImageLink) => {
 }
 
 const handleBatchImport = async () => {
-  if (!batchImportData.value.trim()) {
-    message.warning('请输入导入数据')
+  // 此方法已废弃，改用handleExcelImport
+}
+
+// Excel导入相关方法
+const handleDownloadTemplate = () => {
+  try {
+    downloadImportTemplate()
+    message.success('模板下载成功')
+  } catch (error) {
+    message.error('模板下载失败')
+  }
+}
+
+const beforeUpload: UploadProps['beforeUpload'] = (file) => {
+  // 验证文件类型
+  const isExcel = file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+                  file.type === 'application/vnd.ms-excel' ||
+                  file.name.endsWith('.xlsx') ||
+                  file.name.endsWith('.xls')
+
+  if (!isExcel) {
+    message.error('只能上传Excel文件（.xlsx或.xls）')
+    return false
+  }
+
+  // 验证文件大小（限制为10MB）
+  const isLt10M = file.size / 1024 / 1024 < 10
+  if (!isLt10M) {
+    message.error('文件大小不能超过10MB')
+    return false
+  }
+
+  uploadFileList.value = [file as any]
+  return false // 阻止自动上传
+}
+
+const handleRemoveFile = () => {
+  uploadFileList.value = []
+}
+
+const handleExcelImport = async () => {
+  if (uploadFileList.value?.length === 0) {
+    message.warning('请先选择要上传的Excel文件')
     return
   }
 
+  const file = uploadFileList.value![0] as any
+  importLoading.value = true
+
   try {
-    const lines = batchImportData.value.trim().split('\n')
-    const imageLinks: ImageLink[] = []
+    const result = await importImageLinksFromExcel(file)
+    importResult.value = result
 
-    for (const line of lines) {
-      const parts = line.split(',')
-      if (parts.length >= 3) {
-        const imageName = parts[0].trim()
-        const shopId = batchImportShopId.value || parseInt(parts[1].trim())
-        const imageLink = parts[2].trim()
-
-        imageLinks.push({
-          imageName,
-          shopId,
-          imageLink
-        })
-      }
+    if (result.failureCount === 0) {
+      message.success(`成功导入 ${result.successCount} 条数据`)
+    } else {
+      message.warning(`导入完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`)
     }
 
-    if (imageLinks.length === 0) {
-      message.warning('没有有效的数据行')
-      return
-    }
-
-    await saveOrUpdateImageLinkBatch(imageLinks)
-    message.success(`成功导入 ${imageLinks.length} 条图片链接`)
-    
-    showBatchImportDialog.value = false
-    batchImportData.value = ''
-    batchImportShopId.value = undefined
+    // 刷新列表
     fetchData()
-  } catch (error) {
-    message.error('批量导入失败')
+  } catch (error: any) {
+    console.error('导入失败:', error)
+    message.error(error.message || '导入失败，请检查文件格式')
+  } finally {
+    importLoading.value = false
   }
+}
+
+const handleImportCancel = () => {
+  showBatchImportDialog.value = false
+  uploadFileList.value = []
+  importResult.value = null
+  showErrorDetails.value = false
+}
+
+const handleImportComplete = () => {
+  handleImportCancel()
+  fetchData()
 }
 
 const exportData = () => {
@@ -616,5 +728,34 @@ onMounted(() => {
 .no-image {
   text-align: center;
   padding: 40px;
+}
+
+.import-result {
+  margin-top: 24px;
+}
+
+.error-details {
+  margin-top: 16px;
+  padding: 12px;
+  background-color: #fff1f0;
+  border: 1px solid #ffccc7;
+  border-radius: 4px;
+}
+
+.error-details h5 {
+  margin: 0 0 12px 0;
+  color: #cf1322;
+}
+
+.image-link-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.image-link-text :deep(.ant-typography-copy) {
+  margin-left: 4px;
 }
 </style>

@@ -3,6 +3,7 @@ import DashboardV3 from '@/views/DashboardV3.vue'
 import ProductManagement from '@/views/ProductManagement.vue'
 import ShopManagement from '@/views/ShopManagement.vue'
 import CategoryManagement from '@/views/CategoryManagement.vue'
+import ImageManagement from '@/views/ImageManagement.vue'
 import DataVisualization from '@/views/DataVisualization.vue'
 
 const routes = [
@@ -31,13 +32,18 @@ const routes = [
     component: CategoryManagement
   },
   {
+    path: '/images',
+    name: 'ImageManagement',
+    component: ImageManagement
+  },
+  {
     path: '/product-resources',
     name: 'ProductResourceManagement',
     component: () => import('@/views/ProductResourceManagement.vue')
   },
   {
     path: '/visualization',
-    name: 'DataVisualization', 
+    name: 'DataVisualization',
     component: DataVisualization
   }
 ]

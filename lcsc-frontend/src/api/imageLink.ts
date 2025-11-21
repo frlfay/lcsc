@@ -1,5 +1,5 @@
 import { api } from '@/utils/request'
-import type { ImageLink, PageResult } from '@/types'
+import type { ImageLink, PageResult, ImageLinkImportResult } from '@/types'
 
 // 分页查询图片链接
 export const getImageLinkPage = (params: {
@@ -60,4 +60,27 @@ export const countImageLinkByShopId = (shopId: number): Promise<number> => {
 // 删除指定店铺的所有图片链接
 export const deleteImageLinkByShopId = (shopId: number): Promise<void> => {
   return api.delete(`/image-links/shop/${shopId}`)
+}
+
+// 导入Excel文件
+export const importImageLinksFromExcel = (file: File): Promise<ImageLinkImportResult> => {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  return api.post('/image-links/import', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
+}
+
+// 下载导入模板
+export const downloadImportTemplate = (): void => {
+  const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/image-links/import-template`
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'image_link_import_template.xlsx'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
 }

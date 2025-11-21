@@ -119,6 +119,19 @@ export interface ImageLink {
   updatedAt?: string
 }
 
+// Excel导入错误类型
+export interface ImageLinkImportError {
+  rowNumber: number
+  errors: string[]
+}
+
+// Excel导入结果类型
+export interface ImageLinkImportResult {
+  successCount: number
+  failureCount: number
+  errors: ImageLinkImportError[]
+}
+
 // 资源文件类型
 export interface ResourceFile {
   filename: string

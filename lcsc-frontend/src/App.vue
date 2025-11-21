@@ -38,6 +38,12 @@
                 </template>
                 分类管理
               </a-menu-item>
+              <a-menu-item key="/images">
+                <template #icon>
+                  <PictureOutlined />
+                </template>
+                图片管理
+              </a-menu-item>
 <!--              <a-menu-item key="/product-resources">-->
 <!--                <template #icon>-->
 <!--                  <FileImageOutlined />-->
@@ -66,6 +72,7 @@ import {
   ShoppingOutlined,
   ShopOutlined,
   AppstoreOutlined,
+  PictureOutlined,
   FolderOutlined,
   FileImageOutlined,
   CloudDownloadOutlined
