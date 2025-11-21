@@ -111,9 +111,26 @@ public class CategorySyncService {
                         level1 = new CategoryLevel1Code();
                         level1.setCatalogId(level1CatalogId);
                         level1.setCreatedAt(LocalDateTime.now());
+                        level1.setIsCustomized(0); // 新分类，未被修改过
                     }
 
-                    level1.setCategoryLevel1Name(catalogName);
+                    // P0-5: 分类名称持久化逻辑
+                    // 总是更新source_name为API返回的名称
+                    level1.setSourceName(catalogName);
+
+                    // 根据is_customized决定是否更新显示名称
+                    if (level1.getIsCustomized() == null || level1.getIsCustomized() == 0) {
+                        // 未被用户修改过，使用API名称
+                        level1.setCategoryLevel1Name(catalogName);
+                    } else {
+                        // 已被用户修改过，保持custom_name，显示名称不变
+                        if (level1.getCustomName() != null && !level1.getCustomName().isEmpty()) {
+                            level1.setCategoryLevel1Name(level1.getCustomName());
+                        }
+                        log.debug("保持用户自定义名称: {} (源名称: {})",
+                            level1.getCategoryLevel1Name(), catalogName);
+                    }
+
                     level1.setUpdatedAt(LocalDateTime.now());
 
                     if (isLevel1New) {
@@ -155,9 +172,26 @@ public class CategorySyncService {
                                 level2.setCrawlStatus("NOT_STARTED");
                                 level2.setCrawlProgress(0);
                                 level2.setCreatedAt(LocalDateTime.now());
+                                level2.setIsCustomized(0); // 新分类，未被修改过
                             }
 
-                            level2.setCategoryLevel2Name(level2CatalogName);
+                            // P0-5: 分类名称持久化逻辑
+                            // 总是更新source_name为API返回的名称
+                            level2.setSourceName(level2CatalogName);
+
+                            // 根据is_customized决定是否更新显示名称
+                            if (level2.getIsCustomized() == null || level2.getIsCustomized() == 0) {
+                                // 未被用户修改过，使用API名称
+                                level2.setCategoryLevel2Name(level2CatalogName);
+                            } else {
+                                // 已被用户修改过，保持custom_name，显示名称不变
+                                if (level2.getCustomName() != null && !level2.getCustomName().isEmpty()) {
+                                    level2.setCategoryLevel2Name(level2.getCustomName());
+                                }
+                                log.debug("  保持用户自定义名称: {} (源名称: {})",
+                                    level2.getCategoryLevel2Name(), level2CatalogName);
+                            }
+
                             level2.setCategoryLevel1Id(level1.getId());
                             level2.setUpdatedAt(LocalDateTime.now());
 
@@ -200,9 +234,26 @@ public class CategorySyncService {
                                         level3.setCrawlStatus("NOT_STARTED");
                                         level3.setCrawlProgress(0);
                                         level3.setCreatedAt(LocalDateTime.now());
+                                        level3.setIsCustomized(0); // 新分类，未被修改过
                                     }
 
-                                    level3.setCategoryLevel3Name(level3CatalogName);
+                                    // P0-5: 分类名称持久化逻辑
+                                    // 总是更新source_name为API返回的名称
+                                    level3.setSourceName(level3CatalogName);
+
+                                    // 根据is_customized决定是否更新显示名称
+                                    if (level3.getIsCustomized() == null || level3.getIsCustomized() == 0) {
+                                        // 未被用户修改过，使用API名称
+                                        level3.setCategoryLevel3Name(level3CatalogName);
+                                    } else {
+                                        // 已被用户修改过，保持custom_name，显示名称不变
+                                        if (level3.getCustomName() != null && !level3.getCustomName().isEmpty()) {
+                                            level3.setCategoryLevel3Name(level3.getCustomName());
+                                        }
+                                        log.debug("    保持用户自定义名称: {} (源名称: {})",
+                                            level3.getCategoryLevel3Name(), level3CatalogName);
+                                    }
+
                                     level3.setCategoryLevel1Id(level1.getId());
                                     level3.setCategoryLevel2Id(level2.getId());
                                     level3.setUpdatedAt(LocalDateTime.now());

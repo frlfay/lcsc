@@ -59,7 +59,19 @@
             row-key="id"
           >
             <a-table-column title="ID" dataIndex="id" width="80" />
-            <a-table-column title="分类名称" dataIndex="categoryLevel1Name" width="200" />
+            <a-table-column title="分类名称" dataIndex="categoryLevel1Name" width="200">
+              <template #default="{ record }">
+                <div>
+                  {{ record.categoryLevel1Name }}
+                  <a-tag v-if="record.isCustomized === 1" color="blue" style="margin-left: 8px; font-size: 11px">
+                    自定义
+                  </a-tag>
+                </div>
+                <div v-if="record.isCustomized === 1 && record.sourceName" style="font-size: 12px; color: #999; margin-top: 4px;">
+                  API源名: {{ record.sourceName }}
+                </div>
+              </template>
+            </a-table-column>
             <a-table-column title="分类码" dataIndex="categoryCode" width="150" />
             <a-table-column title="创建时间" dataIndex="createdAt" width="180">
               <template #default="{ record }">
@@ -73,6 +85,10 @@
             </a-table-column>
             <a-table-column title="操作" width="200" fixed="right">
               <template #default="{ record }">
+                <a-button size="small" @click="handleEditCategoryName(record, 'level1')" style="margin-right: 8px;">
+                  <template #icon><EditOutlined /></template>
+                  编辑名称
+                </a-button>
                 <a-button size="small" @click="handleLevel1Edit(record)">
                   <template #icon><EditOutlined /></template>
                   编辑
@@ -291,7 +307,19 @@
             :scroll="{ x: 1500 }"
           >
             <a-table-column title="ID" dataIndex="id" width="80" fixed="left" />
-            <a-table-column title="分类名称" dataIndex="categoryLevel2Name" width="200" fixed="left" />
+            <a-table-column title="分类名称" dataIndex="categoryLevel2Name" width="200" fixed="left">
+              <template #default="{ record }">
+                <div>
+                  {{ record.categoryLevel2Name }}
+                  <a-tag v-if="record.isCustomized === 1" color="blue" style="margin-left: 8px; font-size: 11px">
+                    自定义
+                  </a-tag>
+                </div>
+                <div v-if="record.isCustomized === 1 && record.sourceName" style="font-size: 12px; color: #999; margin-top: 4px;">
+                  API源名: {{ record.sourceName }}
+                </div>
+              </template>
+            </a-table-column>
             <a-table-column title="一级分类" dataIndex="categoryLevel1Id" width="150">
               <template #default="{ record }">
                 {{ getLevel1Name(record.categoryLevel1Id) }}
@@ -339,6 +367,10 @@
             <a-table-column title="操作" width="380" fixed="right">
               <template #default="{ record }">
                 <a-space>
+                  <a-button size="small" @click="handleEditCategoryName(record, 'level2')">
+                    <template #icon><EditOutlined /></template>
+                    编辑名称
+                  </a-button>
                   <a-button
                     size="small"
                     type="primary"
@@ -472,7 +504,19 @@
             :scroll="{ x: 1800 }"
           >
             <a-table-column title="ID" dataIndex="id" width="80" fixed="left" />
-            <a-table-column title="分类名称" dataIndex="categoryLevel3Name" width="200" fixed="left" />
+            <a-table-column title="分类名称" dataIndex="categoryLevel3Name" width="200" fixed="left">
+              <template #default="{ record }">
+                <div>
+                  {{ record.categoryLevel3Name }}
+                  <a-tag v-if="record.isCustomized === 1" color="blue" style="margin-left: 8px; font-size: 11px">
+                    自定义
+                  </a-tag>
+                </div>
+                <div v-if="record.isCustomized === 1 && record.sourceName" style="font-size: 12px; color: #999; margin-top: 4px;">
+                  API源名: {{ record.sourceName }}
+                </div>
+              </template>
+            </a-table-column>
             <a-table-column title="一级分类" dataIndex="categoryLevel1Id" width="150">
               <template #default="{ record }">
                 {{ getLevel1Name(record.categoryLevel1Id) }}
@@ -520,6 +564,10 @@
             <a-table-column title="操作" width="240" fixed="right">
               <template #default="{ record }">
                 <a-space>
+                  <a-button size="small" @click="handleEditCategoryName(record, 'level3')">
+                    <template #icon><EditOutlined /></template>
+                    编辑名称
+                  </a-button>
                   <a-button size="small" @click="handleLevel3Edit(record)">
                     <template #icon><EditOutlined /></template>
                     编辑
@@ -798,6 +846,37 @@
         </div>
       </div>
     </a-modal>
+
+    <!-- P0-5: 编辑名称对话框 -->
+    <a-modal
+      v-model:open="showEditNameDialog"
+      title="编辑分类名称"
+      width="600px"
+      @ok="handleSaveCategoryName"
+      @cancel="resetEditingCategoryName"
+    >
+      <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+        <a-form-item label="当前名称">
+          <a-input :value="editingCategoryName.currentName" disabled />
+        </a-form-item>
+        <a-form-item label="API源名称" v-if="editingCategoryName.sourceName">
+          <a-input :value="editingCategoryName.sourceName" disabled />
+          <div style="font-size: 12px; color: #999; margin-top: 4px;">
+            这是来自立创API的原始名称，仅供参考
+          </div>
+        </a-form-item>
+        <a-form-item label="自定义名称" required>
+          <a-input
+            v-model:value="editingCategoryName.customName"
+            placeholder="输入自定义名称（中文）"
+            allow-clear
+          />
+          <div style="font-size: 12px; color: #999; margin-top: 4px;">
+            保存后，此名称将不会被API同步覆盖
+          </div>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -868,6 +947,15 @@ const showLevel1AddDialog = ref(false)
 const showLevel2AddDialog = ref(false)
 const showLevel3AddDialog = ref(false)
 const showShopCodeDialog = ref(false)
+// P0-5: 编辑名称对话框
+const showEditNameDialog = ref(false)
+const editingCategoryName = reactive({
+  id: undefined as number | undefined,
+  level: '' as 'level1' | 'level2' | 'level3',
+  currentName: '',
+  sourceName: '',
+  customName: ''
+})
 const level1FormRef = ref()
 const level2FormRef = ref()
 const level3FormRef = ref()
@@ -1424,6 +1512,60 @@ const handleLevel3SizeChange = (current: number, size: number) => {
 const handleLevel3CurrentChange = (current: number) => {
   level3Pagination.current = current
   fetchLevel3Data()
+}
+
+// P0-5: 编辑名称相关方法
+const handleEditCategoryName = (record: any, level: 'level1' | 'level2' | 'level3') => {
+  editingCategoryName.id = record.id
+  editingCategoryName.level = level
+  editingCategoryName.currentName = level === 'level1'
+    ? record.categoryLevel1Name
+    : level === 'level2'
+    ? record.categoryLevel2Name
+    : record.categoryLevel3Name
+  editingCategoryName.sourceName = record.sourceName || ''
+  editingCategoryName.customName = record.customName || editingCategoryName.currentName
+  showEditNameDialog.value = true
+}
+
+const handleSaveCategoryName = async () => {
+  if (!editingCategoryName.customName || !editingCategoryName.customName.trim()) {
+    message.error('自定义名称不能为空')
+    return
+  }
+
+  try {
+    const apiPath = `/api/categories/${editingCategoryName.level}/${editingCategoryName.id}/customName`
+    await axios.put(apiPath, {
+      customName: editingCategoryName.customName.trim()
+    })
+
+    message.success('自定义名称保存成功')
+    showEditNameDialog.value = false
+
+    // 刷新对应的列表
+    if (editingCategoryName.level === 'level1') {
+      fetchLevel1Data()
+      loadAllLevel1Categories()
+    } else if (editingCategoryName.level === 'level2') {
+      fetchLevel2Data()
+    } else if (editingCategoryName.level === 'level3') {
+      fetchLevel3Data()
+    }
+  } catch (error: any) {
+    console.error('保存自定义名称失败:', error)
+    message.error(error.response?.data?.message || '保存自定义名称失败')
+  }
+}
+
+const resetEditingCategoryName = () => {
+  Object.assign(editingCategoryName, {
+    id: undefined,
+    level: '',
+    currentName: '',
+    sourceName: '',
+    customName: ''
+  })
 }
 
 // 工具方法

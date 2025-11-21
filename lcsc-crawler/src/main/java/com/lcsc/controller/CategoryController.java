@@ -96,6 +96,38 @@ public class CategoryController {
         }
     }
 
+    // P0-5: 更新一级分类自定义名称
+    @PutMapping(value = "/level1/{id}/customName")
+    public Result<String> updateLevel1CustomName(
+            @PathVariable Integer id,
+            @RequestBody Map<String, String> request) {
+        try {
+            String customName = request.get("customName");
+            if (customName == null || customName.trim().isEmpty()) {
+                return Result.error("自定义名称不能为空");
+            }
+
+            CategoryLevel1Code category = categoryLevel1CodeService.getById(id);
+            if (category == null) {
+                return Result.notFound("一级分类不存在");
+            }
+
+            // 设置自定义名称并标记为已修改
+            category.setCustomName(customName.trim());
+            category.setCategoryLevel1Name(customName.trim()); // 显示名称=自定义名称
+            category.setIsCustomized(1); // 标记为已修改
+
+            boolean success = categoryLevel1CodeService.updateById(category);
+            if (success) {
+                return Result.success("自定义名称更新成功");
+            } else {
+                return Result.error("自定义名称更新失败");
+            }
+        } catch (Exception e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
     // 删除一级分类
     @DeleteMapping("/level1/{id}")
     public Result<String> deleteCategoryLevel1(@PathVariable Integer id) {
@@ -198,6 +230,38 @@ public class CategoryController {
                 return Result.error("二级分类更新失败");
             }
         } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    // P0-5: 更新二级分类自定义名称
+    @PutMapping(value = "/level2/{id}/customName")
+    public Result<String> updateLevel2CustomName(
+            @PathVariable Integer id,
+            @RequestBody Map<String, String> request) {
+        try {
+            String customName = request.get("customName");
+            if (customName == null || customName.trim().isEmpty()) {
+                return Result.error("自定义名称不能为空");
+            }
+
+            CategoryLevel2Code category = categoryLevel2CodeService.getById(id);
+            if (category == null) {
+                return Result.notFound("二级分类不存在");
+            }
+
+            // 设置自定义名称并标记为已修改
+            category.setCustomName(customName.trim());
+            category.setCategoryLevel2Name(customName.trim()); // 显示名称=自定义名称
+            category.setIsCustomized(1); // 标记为已修改
+
+            boolean success = categoryLevel2CodeService.updateById(category);
+            if (success) {
+                return Result.success("自定义名称更新成功");
+            } else {
+                return Result.error("自定义名称更新失败");
+            }
+        } catch (Exception e) {
             return Result.error(e.getMessage());
         }
     }
@@ -306,6 +370,38 @@ public class CategoryController {
                 return Result.error("三级分类更新失败");
             }
         } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    // P0-5: 更新三级分类自定义名称
+    @PutMapping(value = "/level3/{id}/customName")
+    public Result<String> updateLevel3CustomName(
+            @PathVariable Integer id,
+            @RequestBody Map<String, String> request) {
+        try {
+            String customName = request.get("customName");
+            if (customName == null || customName.trim().isEmpty()) {
+                return Result.error("自定义名称不能为空");
+            }
+
+            CategoryLevel3Code category = categoryLevel3CodeService.getById(id);
+            if (category == null) {
+                return Result.notFound("三级分类不存在");
+            }
+
+            // 设置自定义名称并标记为已修改
+            category.setCustomName(customName.trim());
+            category.setCategoryLevel3Name(customName.trim()); // 显示名称=自定义名称
+            category.setIsCustomized(1); // 标记为已修改
+
+            boolean success = categoryLevel3CodeService.updateById(category);
+            if (success) {
+                return Result.success("自定义名称更新成功");
+            } else {
+                return Result.error("自定义名称更新失败");
+            }
+        } catch (Exception e) {
             return Result.error(e.getMessage());
         }
     }

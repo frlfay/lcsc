@@ -692,6 +692,51 @@ ALTER TABLE category_level2_codes ADD UNIQUE KEY uk_catalog_id (catalog_id);
 
 ---
 
+#### P0-4: 突破5000条列表限制
+**状态**: ✅ 已完成
+
+**实现内容**:
+- 新增`BrandSplitUnit.java` DTO封装品牌拆分单元
+- 新增`TaskSplitService.java`提供品牌拆分逻辑
+  - `needSplit(int totalProducts)` - 判断是否需要拆分（阈值4800）
+  - `splitByBrand(String catalogId)` - 调用API获取品牌列表并拆分
+- `CrawlerTaskQueueService.java`新增`createBrandFilteredTask()`方法创建品牌筛选子任务
+- `CategoryCrawlerWorkerPool.java`添加拆分检测逻辑
+  - 子任务预处理：在第一次API调用前添加品牌筛选参数
+  - 拆分触发：检测到totalProducts>4800时调用品牌拆分
+  - 停止清理：停止爬虫时自动清理Redis残留任务
+  - 自动停止：所有任务完成时自动停止爬虫
+- 前端`DashboardV3.vue`显示子任务数量
+  - 队列状态新增`subTaskCount`字段
+  - "待处理"卡片显示"含XX个品牌子任务"
+  - 进度条显示子任务提示
+
+**关键文件**:
+- `lcsc-crawler/src/main/java/com/lcsc/dto/BrandSplitUnit.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/TaskSplitService.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CrawlerTaskQueueService.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java` (MODIFIED)
+- `lcsc-frontend/src/views/DashboardV3.vue` (MODIFIED)
+
+**技术细节**:
+- 拆分阈值：4800（保留200条buffer）
+- 最大子任务数：50
+- 品牌字段：优先匹配`Manufacturer`（立创API实际字段名）
+- 子任务标识：`isSubTask=true`, `splitStrategy=BRAND`, `filterParams={"brandIdList":["xxx"]}`
+- 任务ID格式：`TASK_{categoryId}_BRAND_{brandId}_{timestamp}`
+
+**⚠️ 关键Bug修复**:
+- 品牌字段名匹配：立创API返回`Manufacturer`而非`Brand`
+- 子任务筛选参数时机：必须在第一次API调用**之前**添加，而非之后
+- 停止清理残留任务：停止爬虫时等待3秒后清理Redis中的"处理中"任务
+
+**教训**:
+- **外部API字段名不可假设**：要支持多种可能的字段名（Manufacturer, Brand, manufacturer等）
+- **筛选参数添加时机很关键**：子任务的筛选参数必须在构建第一次API请求前就加入
+- **停止时需要清理状态**：Worker线程退出后Redis中的任务状态需要手动清理
+
+---
+
 ### 🐛 Bug修复记录
 
 #### Bug-1: 产品图片渲染显示占位符

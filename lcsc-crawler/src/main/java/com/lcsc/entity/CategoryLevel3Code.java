@@ -24,6 +24,21 @@ public class CategoryLevel3Code {
     private String categoryLevel3Name;
 
     /**
+     * API源名称（只读，每次同步更新）
+     */
+    private String sourceName;
+
+    /**
+     * 用户自定义名称（手动编辑后设置，优先级最高）
+     */
+    private String customName;
+
+    /**
+     * 是否被用户修改过（0=否，1=是）
+     */
+    private Integer isCustomized;
+
+    /**
      * 立创API返回的catalogId
      */
     private String catalogId;
@@ -194,5 +209,29 @@ public class CategoryLevel3Code {
 
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
+    }
+
+    public String getSourceName() {
+        return sourceName;
+    }
+
+    public void setSourceName(String sourceName) {
+        this.sourceName = sourceName;
+    }
+
+    public String getCustomName() {
+        return customName;
+    }
+
+    public void setCustomName(String customName) {
+        this.customName = customName;
+    }
+
+    public Integer getIsCustomized() {
+        return isCustomized;
+    }
+
+    public void setIsCustomized(Integer isCustomized) {
+        this.isCustomized = isCustomized;
     }
 }
