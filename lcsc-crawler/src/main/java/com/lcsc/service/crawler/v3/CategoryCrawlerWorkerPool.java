@@ -785,10 +785,12 @@ public class CategoryCrawlerWorkerPool {
 
         ImageSelection preferredImage = selectPreferredImage(productData);
         if (preferredImage != null) {
-            Path imagePath = resolveStoragePath(imageDirName).resolve(preferredImage.filename());
+            // P0-7: 使用新的命名规则 编号_图类.jpg
+            String newFilename = generateImageFilename(product.getProductCode(), preferredImage.filename());
+            Path imagePath = resolveStoragePath(imageDirName).resolve(newFilename);
             String imagePathStr = imagePath.toString();
 
-            product.setImageName(preferredImage.filename());
+            product.setImageName(newFilename);
             product.setImageLocalPath(imagePathStr);
             product.setMainImageLocalPath(imagePathStr);
 
@@ -800,7 +802,7 @@ public class CategoryCrawlerWorkerPool {
             product.setProductImagesInfo(imagesInfoJson);
 
             fileDownloadService.submitDownloadTask(preferredImage.url(), imagePathStr, "image");
-            log.info("Worker 产品 {} 选择图片 {} (优先级 {})", product.getProductCode(), preferredImage.filename(), preferredImage.priority());
+            log.info("Worker 产品 {} 选择图片 {} -> {} (优先级 {})", product.getProductCode(), preferredImage.filename(), newFilename, preferredImage.priority());
         } else {
             product.setImageName(null);
             product.setImageLocalPath(null);
@@ -1077,6 +1079,10 @@ public class CategoryCrawlerWorkerPool {
         return sanitized;
     }
 
+    /**
+     * P0-7: 计算图片优先级
+     * 优先级: front(0) > blank(1) > package(2) > back(3) > 无(4)
+     */
     private int computeImagePriority(String filename) {
         String lower = filename.toLowerCase();
         if (lower.contains("_front")) {
@@ -1088,7 +1094,46 @@ public class CategoryCrawlerWorkerPool {
         if (lower.contains("_package")) {
             return 2;
         }
-        return 3;
+        if (lower.contains("_back")) {
+            return 3;
+        }
+        return 4;
+    }
+
+    /**
+     * P0-7: 从URL文件名提取图片类型
+     * 例如: xxx_front_96.jpg -> front, xxx_blank_96.jpg -> blank
+     */
+    private String extractImageType(String filename) {
+        String lower = filename.toLowerCase();
+        if (lower.contains("_front")) {
+            return "front";
+        }
+        if (lower.contains("_blank")) {
+            return "blank";
+        }
+        if (lower.contains("_package")) {
+            return "package";
+        }
+        if (lower.contains("_back")) {
+            return "back";
+        }
+        return "img";  // 默认类型
+    }
+
+    /**
+     * P0-7: 生成新的图片文件名
+     * 格式: 编号_图类.jpg (例: C123456_front.jpg)
+     */
+    private String generateImageFilename(String productCode, String originalFilename) {
+        String imageType = extractImageType(originalFilename);
+        // 提取扩展名
+        String extension = ".jpg";
+        int dotIndex = originalFilename.lastIndexOf('.');
+        if (dotIndex > 0) {
+            extension = originalFilename.substring(dotIndex).toLowerCase();
+        }
+        return productCode + "_" + imageType + extension;
     }
 
     private int computeImageResolutionScore(String url) {

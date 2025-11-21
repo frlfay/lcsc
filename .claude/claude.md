@@ -827,6 +827,83 @@ if (level1.getIsCustomized() == null || level1.getIsCustomized() == 0) {
 
 ---
 
+#### P0-6: 价格阶梯扩展（从5级到6级）
+**状态**: ✅ 已完成
+
+**需求**: 数据库及解析逻辑从支持5级阶梯价扩展至6级阶梯价
+
+**实现方案**:
+- **数据库**：新增2个字段
+  - `ladder_price6_quantity` INT: 阶梯6数量
+  - `ladder_price6_price` DECIMAL(10,4): 阶梯6单价（CNY）
+- **后端Entity**：Product.java添加字段和getter/setter
+- **爬虫解析**：processLadderPrices方法从5改为6
+- **前端显示**：Tooltip显示6级、编辑表单支持6级
+
+**关键文件**:
+- `lcsc-crawler/src/main/resources/db/migration_p0-6_price_tier6.sql` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/entity/Product.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java` (MODIFIED)
+- `lcsc-frontend/src/views/ProductManagement.vue` (MODIFIED)
+
+**核心改动** ([CategoryCrawlerWorkerPool.java:1199](lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java#L1199)):
+```java
+// 从 Math.min(sorted.size(), 5) 改为 6
+for (int i = 0; i < Math.min(sorted.size(), 6); i++) {
+    // ...
+    case 5 -> { product.setLadderPrice6Quantity(quantity); product.setLadderPrice6Price(priceValue); }
+}
+```
+
+---
+
+#### P0-7: 图片命名与逻辑重构
+**状态**: ✅ 已完成
+
+**需求**:
+- 命名规则变更：从原始文件名改为 `编号_图类.jpg`（如 `C123456_front.jpg`）
+- 优先级调整：`front > blank > package > back > 无`
+
+**实现方案**:
+- **新增方法**：
+  - `extractImageType(filename)`: 从URL文件名提取图类（front/blank/package/back/img）
+  - `generateImageFilename(productCode, originalFilename)`: 生成新文件名格式
+- **优先级逻辑**：`computeImagePriority`方法调整
+  - front: 0（最高）
+  - blank: 1
+  - package: 2
+  - back: 3
+  - 无标识: 4（最低）
+
+**关键文件**:
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java` (MODIFIED)
+
+**核心代码** ([CategoryCrawlerWorkerPool.java:1082-1137](lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java#L1082-L1137)):
+```java
+// 优先级计算
+private int computeImagePriority(String filename) {
+    String lower = filename.toLowerCase();
+    if (lower.contains("_front")) { return 0; }
+    if (lower.contains("_blank")) { return 1; }
+    if (lower.contains("_package")) { return 2; }
+    if (lower.contains("_back")) { return 3; }
+    return 4;
+}
+
+// 生成新文件名
+private String generateImageFilename(String productCode, String originalFilename) {
+    String imageType = extractImageType(originalFilename);
+    String extension = ".jpg";
+    int dotIndex = originalFilename.lastIndexOf('.');
+    if (dotIndex > 0) {
+        extension = originalFilename.substring(dotIndex).toLowerCase();
+    }
+    return productCode + "_" + imageType + extension;
+}
+```
+
+---
+
 ### 🐛 Bug修复记录
 
 #### Bug-1: 产品图片渲染显示占位符
