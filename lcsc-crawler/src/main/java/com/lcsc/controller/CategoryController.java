@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.lcsc.common.Result;
 import com.lcsc.entity.CategoryLevel1Code;
 import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.CategoryLevel3Code;
 import com.lcsc.service.CategoryLevel1CodeService;
 import com.lcsc.service.CategoryLevel2CodeService;
+import com.lcsc.service.CategoryLevel3CodeService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -28,6 +30,9 @@ public class CategoryController {
 
     @Autowired
     private CategoryLevel2CodeService categoryLevel2CodeService;
+
+    @Autowired
+    private CategoryLevel3CodeService categoryLevel3CodeService;
 
     // ========== 一级分类 API ==========
 
@@ -230,21 +235,101 @@ public class CategoryController {
     // 更新店铺分类码
     @PutMapping(value = "/level2/{categoryLevel2Id}/shop/{shopId}/code")
     public Result<String> updateShopCategoryCode(
-            @PathVariable Integer categoryLevel2Id, 
-            @PathVariable Integer shopId, 
+            @PathVariable Integer categoryLevel2Id,
+            @PathVariable Integer shopId,
             @RequestBody Map<String, String> request
     ) {
         String categoryCode = request.get("categoryCode");
         if (categoryCode == null || categoryCode.trim().isEmpty()) {
             return Result.paramError("分类码不能为空");
         }
-        
+
         boolean success = categoryLevel2CodeService.updateShopCategoryCode(
                 categoryLevel2Id, shopId, categoryCode);
         if (success) {
             return Result.success("店铺分类码更新成功");
         } else {
             return Result.error("店铺分类码更新失败");
+        }
+    }
+
+    // ========== 三级分类 API ==========
+
+    // 根据二级分类ID查询三级分类列表
+    @GetMapping("/level3/list/{categoryLevel2Id}")
+    public Result<List<CategoryLevel3Code>> getCategoryLevel3ListByLevel2Id(@PathVariable Integer categoryLevel2Id) {
+        List<CategoryLevel3Code> categories = categoryLevel3CodeService.getByLevel2Id(categoryLevel2Id);
+        return Result.success(categories);
+    }
+
+    // 获取所有三级分类列表
+    @GetMapping("/level3/list")
+    public Result<List<CategoryLevel3Code>> getAllCategoryLevel3List() {
+        List<CategoryLevel3Code> categories = categoryLevel3CodeService.getAllCategoryLevel3List();
+        return Result.success(categories);
+    }
+
+    // 根据ID查询三级分类
+    @GetMapping("/level3/{id}")
+    public Result<CategoryLevel3Code> getCategoryLevel3ById(@PathVariable Integer id) {
+        CategoryLevel3Code category = categoryLevel3CodeService.getById(id);
+        if (category == null) {
+            return Result.notFound("三级分类不存在");
+        }
+        return Result.success(category);
+    }
+
+    // 新增三级分类
+    @PostMapping(value = "/level3")
+    public Result<String> addCategoryLevel3(@RequestBody CategoryLevel3Code category) {
+        try {
+            boolean success = categoryLevel3CodeService.saveOrUpdate(category);
+            if (success) {
+                return Result.success("三级分类添加成功");
+            } else {
+                return Result.error("三级分类添加失败");
+            }
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    // 更新三级分类
+    @PutMapping(value = "/level3/{id}")
+    public Result<String> updateCategoryLevel3(@PathVariable Integer id, @RequestBody CategoryLevel3Code category) {
+        category.setId(id);
+        try {
+            boolean success = categoryLevel3CodeService.saveOrUpdate(category);
+            if (success) {
+                return Result.success("三级分类更新成功");
+            } else {
+                return Result.error("三级分类更新失败");
+            }
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    // 删除三级分类
+    @DeleteMapping("/level3/{id}")
+    public Result<String> deleteCategoryLevel3(@PathVariable Integer id) {
+        boolean success = categoryLevel3CodeService.deleteCategoryById(id);
+        if (success) {
+            return Result.success("三级分类删除成功");
+        } else {
+            return Result.error("三级分类删除失败");
+        }
+    }
+
+    // 批量删除三级分类
+    @DeleteMapping(value = "/level3/batch")
+    public Result<String> deleteCategoryLevel3Batch(@RequestBody List<Long> ids) {
+        List<Integer> intIds = ids.stream().map(Long::intValue).toList();
+        boolean success = categoryLevel3CodeService.deleteCategoryBatch(intIds);
+        if (success) {
+            return Result.success("批量删除成功，共删除" + ids.size() + "条记录");
+        } else {
+            return Result.error("批量删除失败");
         }
     }
 }

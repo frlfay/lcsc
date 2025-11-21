@@ -1,5 +1,5 @@
 import { api } from '@/utils/request'
-import type { CategoryLevel1Code, CategoryLevel2Code, PageResult } from '@/types'
+import type { CategoryLevel1Code, CategoryLevel2Code, CategoryLevel3Code, PageResult } from '@/types'
 
 // ========== 一级分类 API ==========
 
@@ -60,6 +60,11 @@ export const getCategoryLevel2ListByLevel1Id = (categoryLevel1Id: number): Promi
   return api.get(`/categories/level2/list/${categoryLevel1Id}`)
 }
 
+// 获取所有二级分类列表
+export const getCategoryLevel2List = (): Promise<CategoryLevel2Code[]> => {
+  return api.get('/categories/level2/list')
+}
+
 // 根据ID查询二级分类
 export const getCategoryLevel2ById = (id: number): Promise<CategoryLevel2Code> => {
   return api.get(`/categories/level2/${id}`)
@@ -93,4 +98,41 @@ export const getShopCategoryCode = (categoryLevel2Id: number, shopId: number): P
 // 更新店铺分类码
 export const updateShopCategoryCode = (categoryLevel2Id: number, shopId: number, categoryCode: string): Promise<void> => {
   return api.put(`/categories/level2/${categoryLevel2Id}/shop/${shopId}/code`, { categoryCode })
+}
+
+// ========== 三级分类 API ==========
+
+// 获取所有三级分类列表
+export const getCategoryLevel3List = (): Promise<CategoryLevel3Code[]> => {
+  return api.get('/categories/level3/list')
+}
+
+// 根据二级分类ID查询三级分类列表
+export const getCategoryLevel3ListByLevel2Id = (categoryLevel2Id: number): Promise<CategoryLevel3Code[]> => {
+  return api.get(`/categories/level3/list/${categoryLevel2Id}`)
+}
+
+// 根据ID查询三级分类
+export const getCategoryLevel3ById = (id: number): Promise<CategoryLevel3Code> => {
+  return api.get(`/categories/level3/${id}`)
+}
+
+// 新增三级分类
+export const addCategoryLevel3 = (data: CategoryLevel3Code): Promise<void> => {
+  return api.post('/categories/level3', data)
+}
+
+// 更新三级分类
+export const updateCategoryLevel3 = (id: number, data: CategoryLevel3Code): Promise<void> => {
+  return api.put(`/categories/level3/${id}`, data)
+}
+
+// 删除三级分类
+export const deleteCategoryLevel3 = (id: number): Promise<void> => {
+  return api.delete(`/categories/level3/${id}`)
+}
+
+// 批量删除三级分类
+export const deleteCategoryLevel3Batch = (ids: number[]): Promise<void> => {
+  return api.delete('/categories/level3/batch', { data: ids })
 }

@@ -79,19 +79,18 @@ public class CategorySyncService {
                     throw new RuntimeException("API返回的分类列表为空");
                 }
 
-                // 3. 清空旧数据（覆盖模式 - 级联删除）
-                log.info("步骤3: 清空旧数据");
-                level3Mapper.delete(null);  // 先删除三级分类
-                level2Mapper.delete(null);  // 再删除二级分类
-                level1Mapper.delete(null);  // 最后删除一级分类
-                log.info("旧数据已清空");
+                // 3. 使用UPSERT模式，保持ID稳定（不再删除旧数据）
+                log.info("步骤3: 使用UPSERT模式同步分类（保持ID稳定）");
 
                 int level1Count = 0;
                 int level2Count = 0;
                 int level3Count = 0;  // 新增三级分类计数
+                int level1Updated = 0;
+                int level2Updated = 0;
+                int level3Updated = 0;
 
-                // 4. 批量插入新数据
-                log.info("步骤4: 开始插入新数据");
+                // 4. UPSERT新数据（基于catalog_id判断是否存在）
+                log.info("步骤4: 开始同步分类数据");
 
                 for (Map<String, Object> level1Data : catalogList) {
                     // 获取分类名称,如果为空则跳过
@@ -101,17 +100,33 @@ public class CategorySyncService {
                         continue;
                     }
 
-                    // 创建一级分类
-                    CategoryLevel1Code level1 = new CategoryLevel1Code();
+                    // UPSERT一级分类（基于catalog_id查询是否存在）
+                    String level1CatalogId = String.valueOf(level1Data.get("catalogId"));
+                    CategoryLevel1Code level1 = level1Mapper.selectOne(
+                        new QueryWrapper<CategoryLevel1Code>().eq("catalog_id", level1CatalogId)
+                    );
+
+                    boolean isLevel1New = (level1 == null);
+                    if (isLevel1New) {
+                        level1 = new CategoryLevel1Code();
+                        level1.setCatalogId(level1CatalogId);
+                        level1.setCreatedAt(LocalDateTime.now());
+                    }
+
                     level1.setCategoryLevel1Name(catalogName);
-                    level1.setCatalogId(String.valueOf(level1Data.get("catalogId")));
-                    level1.setCreatedAt(LocalDateTime.now());
                     level1.setUpdatedAt(LocalDateTime.now());
 
-                    level1Mapper.insert(level1);
-                    level1Count++;
-
-                    log.debug("插入一级分类: {} (ID: {})", level1.getCategoryLevel1Name(), level1.getId());
+                    if (isLevel1New) {
+                        level1Mapper.insert(level1);
+                        level1Count++;
+                        log.debug("插入一级分类: {} (ID: {}, catalogId: {})",
+                            level1.getCategoryLevel1Name(), level1.getId(), level1CatalogId);
+                    } else {
+                        level1Mapper.updateById(level1);
+                        level1Updated++;
+                        log.debug("更新一级分类: {} (ID: {}, catalogId: {})",
+                            level1.getCategoryLevel1Name(), level1.getId(), level1CatalogId);
+                    }
 
                     // 创建二级分类
                     @SuppressWarnings("unchecked")
@@ -127,20 +142,36 @@ public class CategorySyncService {
                                 continue;
                             }
 
-                            CategoryLevel2Code level2 = new CategoryLevel2Code();
+                            // UPSERT二级分类（基于catalog_id查询是否存在）
+                            String level2CatalogId = String.valueOf(level2Data.get("catalogId"));
+                            CategoryLevel2Code level2 = level2Mapper.selectOne(
+                                new QueryWrapper<CategoryLevel2Code>().eq("catalog_id", level2CatalogId)
+                            );
+
+                            boolean isLevel2New = (level2 == null);
+                            if (isLevel2New) {
+                                level2 = new CategoryLevel2Code();
+                                level2.setCatalogId(level2CatalogId);
+                                level2.setCrawlStatus("NOT_STARTED");
+                                level2.setCrawlProgress(0);
+                                level2.setCreatedAt(LocalDateTime.now());
+                            }
+
                             level2.setCategoryLevel2Name(level2CatalogName);
-                            level2.setCatalogId(String.valueOf(level2Data.get("catalogId")));
                             level2.setCategoryLevel1Id(level1.getId());
-                            level2.setCrawlStatus("NOT_STARTED");
-                            level2.setCrawlProgress(0);
-                            level2.setCreatedAt(LocalDateTime.now());
                             level2.setUpdatedAt(LocalDateTime.now());
 
-                            level2Mapper.insert(level2);
-                            level2Count++;
-
-                            log.debug("  插入二级分类: {} (ID: {})",
-                                level2.getCategoryLevel2Name(), level2.getId());
+                            if (isLevel2New) {
+                                level2Mapper.insert(level2);
+                                level2Count++;
+                                log.debug("  插入二级分类: {} (ID: {}, catalogId: {})",
+                                    level2.getCategoryLevel2Name(), level2.getId(), level2CatalogId);
+                            } else {
+                                level2Mapper.updateById(level2);
+                                level2Updated++;
+                                log.debug("  更新二级分类: {} (ID: {}, catalogId: {})",
+                                    level2.getCategoryLevel2Name(), level2.getId(), level2CatalogId);
+                            }
 
                             // 🔑 关键：处理三级分类
                             @SuppressWarnings("unchecked")
@@ -156,21 +187,37 @@ public class CategorySyncService {
                                         continue;
                                     }
 
-                                    CategoryLevel3Code level3 = new CategoryLevel3Code();
+                                    // UPSERT三级分类（基于catalog_id查询是否存在）
+                                    String level3CatalogId = String.valueOf(level3Data.get("catalogId"));
+                                    CategoryLevel3Code level3 = level3Mapper.selectOne(
+                                        new QueryWrapper<CategoryLevel3Code>().eq("catalog_id", level3CatalogId)
+                                    );
+
+                                    boolean isLevel3New = (level3 == null);
+                                    if (isLevel3New) {
+                                        level3 = new CategoryLevel3Code();
+                                        level3.setCatalogId(level3CatalogId);
+                                        level3.setCrawlStatus("NOT_STARTED");
+                                        level3.setCrawlProgress(0);
+                                        level3.setCreatedAt(LocalDateTime.now());
+                                    }
+
                                     level3.setCategoryLevel3Name(level3CatalogName);
-                                    level3.setCatalogId(String.valueOf(level3Data.get("catalogId")));
                                     level3.setCategoryLevel1Id(level1.getId());
                                     level3.setCategoryLevel2Id(level2.getId());
-                                    level3.setCrawlStatus("NOT_STARTED");
-                                    level3.setCrawlProgress(0);
-                                    level3.setCreatedAt(LocalDateTime.now());
                                     level3.setUpdatedAt(LocalDateTime.now());
 
-                                    level3Mapper.insert(level3);
-                                    level3Count++;
-
-                                    log.debug("    插入三级分类: {} (ID: {})",
-                                        level3.getCategoryLevel3Name(), level3.getId());
+                                    if (isLevel3New) {
+                                        level3Mapper.insert(level3);
+                                        level3Count++;
+                                        log.debug("    插入三级分类: {} (ID: {}, catalogId: {})",
+                                            level3.getCategoryLevel3Name(), level3.getId(), level3CatalogId);
+                                    } else {
+                                        level3Mapper.updateById(level3);
+                                        level3Updated++;
+                                        log.debug("    更新三级分类: {} (ID: {}, catalogId: {})",
+                                            level3.getCategoryLevel3Name(), level3.getId(), level3CatalogId);
+                                    }
                                 }
                             }
                         }
@@ -182,9 +229,9 @@ public class CategorySyncService {
                 redisTemplate.opsForHash().put(REDIS_STATE_KEY, "categoriesSynced", true);
 
                 log.info("========== 分类同步完成 ==========");
-                log.info("一级分类: {} 个", level1Count);
-                log.info("二级分类: {} 个", level2Count);
-                log.info("三级分类: {} 个", level3Count);
+                log.info("一级分类: 新增={} 个, 更新={} 个", level1Count, level1Updated);
+                log.info("二级分类: 新增={} 个, 更新={} 个", level2Count, level2Updated);
+                log.info("三级分类: 新增={} 个, 更新={} 个", level3Count, level3Updated);
 
                 // 同步完成后，刷新 Redis 中的分类名称映射，便于后续下载/处理快速读取
                 try {
@@ -198,6 +245,9 @@ public class CategorySyncService {
                     "level1Count", level1Count,
                     "level2Count", level2Count,
                     "level3Count", level3Count,
+                    "level1Updated", level1Updated,
+                    "level2Updated", level2Updated,
+                    "level3Updated", level3Updated,
                     "message", "分类同步成功"
                 );
 

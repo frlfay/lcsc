@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.lcsc.entity.CategoryLevel1Code;
 import com.lcsc.entity.CategoryLevel2Code;
+import com.lcsc.entity.CategoryLevel3Code;
 import com.lcsc.entity.Product;
 import com.lcsc.mapper.ProductMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,15 +34,18 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
     @Autowired
     private CategoryLevel2CodeService categoryLevel2CodeService;
 
+    @Autowired
+    private CategoryLevel3CodeService categoryLevel3CodeService;
+
     /**
      * 分页查询产品
      */
-    public IPage<Product> getProductPage(int current, int size, String productCode, String brand, 
-                                       String model, String packageName, Integer categoryLevel1Id, 
-                                       Integer categoryLevel2Id, Boolean hasStock) {
+    public IPage<Product> getProductPage(int current, int size, String productCode, String brand,
+                                       String model, String packageName, Integer categoryLevel1Id,
+                                       Integer categoryLevel2Id, Integer categoryLevel3Id, Boolean hasStock) {
         Page<Product> page = new Page<>(current, size);
         LambdaQueryWrapper<Product> wrapper = new LambdaQueryWrapper<>();
-        
+
         if (productCode != null && !productCode.trim().isEmpty()) {
             wrapper.like(Product::getProductCode, productCode);
         }
@@ -61,6 +65,9 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
         if (categoryLevel2Id != null) {
             wrapper.eq(Product::getCategoryLevel2Id, categoryLevel2Id);
         }
+        if (categoryLevel3Id != null) {
+            wrapper.eq(Product::getCategoryLevel3Id, categoryLevel3Id);
+        }
         if (hasStock != null) {
             if (hasStock) {
                 wrapper.gt(Product::getTotalStockQuantity, 0);
@@ -68,9 +75,9 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
                 wrapper.le(Product::getTotalStockQuantity, 0);
             }
         }
-        
+
         wrapper.orderByDesc(Product::getLastCrawledAt);
-        
+
         IPage<Product> result = page(page, wrapper);
 
         // 填充分类名称，避免前端只拿到ID无法展示
@@ -83,7 +90,7 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
      * 分页查询产品（向后兼容方法）
      */
     public IPage<Product> getProductPage(int current, int size, String productCode, String brand) {
-        return getProductPage(current, size, productCode, brand, null, null, null, null, null);
+        return getProductPage(current, size, productCode, brand, null, null, null, null, null, null);
     }
 
     /**
@@ -173,6 +180,10 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
                 .map(Product::getCategoryLevel2Id)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
+        Set<Integer> level3Ids = products.stream()
+                .map(Product::getCategoryLevel3Id)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
 
         Map<Integer, String> level1NameMap = level1Ids.isEmpty() ? new HashMap<>() :
                 categoryLevel1CodeService.listByIds(level1Ids).stream()
@@ -182,6 +193,10 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
                 categoryLevel2CodeService.listByIds(level2Ids).stream()
                         .collect(Collectors.toMap(CategoryLevel2Code::getId, CategoryLevel2Code::getCategoryLevel2Name));
 
+        Map<Integer, String> level3NameMap = level3Ids.isEmpty() ? new HashMap<>() :
+                categoryLevel3CodeService.listByIds(level3Ids).stream()
+                        .collect(Collectors.toMap(CategoryLevel3Code::getId, CategoryLevel3Code::getCategoryLevel3Name));
+
         for (Product p : products) {
             if (p == null) continue;
             if (p.getCategoryLevel1Id() != null) {
@@ -189,6 +204,9 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
             }
             if (p.getCategoryLevel2Id() != null) {
                 p.setCategoryLevel2Name(level2NameMap.get(p.getCategoryLevel2Id()));
+            }
+            if (p.getCategoryLevel3Id() != null) {
+                p.setCategoryLevel3Name(level3NameMap.get(p.getCategoryLevel3Id()));
             }
         }
     }
@@ -210,6 +228,12 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
             CategoryLevel2Code l2 = categoryLevel2CodeService.getById(product.getCategoryLevel2Id());
             if (l2 != null) {
                 product.setCategoryLevel2Name(l2.getCategoryLevel2Name());
+            }
+        }
+        if (product.getCategoryLevel3Id() != null) {
+            CategoryLevel3Code l3 = categoryLevel3CodeService.getById(product.getCategoryLevel3Id());
+            if (l3 != null) {
+                product.setCategoryLevel3Name(l3.getCategoryLevel3Name());
             }
         }
     }

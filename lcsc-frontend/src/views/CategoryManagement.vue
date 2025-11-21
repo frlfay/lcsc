@@ -374,6 +374,166 @@
           </a-table>
         </a-card>
       </a-tab-pane>
+
+      <a-tab-pane key="level3" tab="三级分类管理">
+        <!-- 三级分类搜索区域 -->
+        <a-card class="mb-4">
+          <a-form :model="level3SearchForm" layout="inline">
+            <a-form-item label="分类名称">
+              <a-input
+                v-model:value="level3SearchForm.categoryName"
+                placeholder="输入分类名称"
+                allow-clear
+                style="width: 200px"
+              />
+            </a-form-item>
+            <a-form-item label="一级分类">
+              <a-select
+                v-model:value="level3SearchForm.categoryLevel1Id"
+                placeholder="选择一级分类"
+                allow-clear
+                style="width: 200px"
+                @change="handleLevel3Level1Change"
+              >
+                <a-select-option
+                  v-for="item in allLevel1Categories"
+                  :key="item.id"
+                  :value="item.id"
+                >
+                  {{ item.categoryLevel1Name }}
+                </a-select-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="二级分类">
+              <a-select
+                v-model:value="level3SearchForm.categoryLevel2Id"
+                placeholder="选择二级分类"
+                allow-clear
+                style="width: 200px"
+                :disabled="!level3SearchForm.categoryLevel1Id"
+              >
+                <a-select-option
+                  v-for="item in level3Level2Categories"
+                  :key="item.id"
+                  :value="item.id"
+                >
+                  {{ item.categoryLevel2Name }}
+                </a-select-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="爬取状态">
+              <a-select
+                v-model:value="level3SearchForm.crawlStatus"
+                placeholder="选择爬取状态"
+                allow-clear
+                style="width: 150px"
+              >
+                <a-select-option value="pending">待爬取</a-select-option>
+                <a-select-option value="processing">爬取中</a-select-option>
+                <a-select-option value="completed">已完成</a-select-option>
+                <a-select-option value="failed">失败</a-select-option>
+              </a-select>
+            </a-form-item>
+          </a-form>
+          <div class="search-actions">
+            <a-button type="primary" @click="handleLevel3Search">
+              <template #icon><SearchOutlined /></template>
+              搜索
+            </a-button>
+            <a-button @click="handleLevel3Reset">
+              <template #icon><ReloadOutlined /></template>
+              重置
+            </a-button>
+            <a-button type="primary" @click="showLevel3AddDialog = true">
+              <template #icon><PlusOutlined /></template>
+              新增三级分类
+            </a-button>
+          </div>
+        </a-card>
+
+        <!-- 三级分类列表 -->
+        <a-card>
+          <a-table
+            :dataSource="level3TableData"
+            :loading="level3Loading"
+            :pagination="{
+              current: level3Pagination.current,
+              pageSize: level3Pagination.size,
+              total: level3Pagination.total,
+              showSizeChanger: true,
+              showQuickJumper: true,
+              showTotal: (total: number) => `共 ${total} 条`,
+              pageSizeOptions: ['10', '20', '50', '100'],
+              onChange: handleLevel3CurrentChange,
+              onShowSizeChange: handleLevel3SizeChange
+            }"
+            bordered
+            row-key="id"
+            :scroll="{ x: 1800 }"
+          >
+            <a-table-column title="ID" dataIndex="id" width="80" fixed="left" />
+            <a-table-column title="分类名称" dataIndex="categoryLevel3Name" width="200" fixed="left" />
+            <a-table-column title="一级分类" dataIndex="categoryLevel1Id" width="150">
+              <template #default="{ record }">
+                {{ getLevel1Name(record.categoryLevel1Id) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="二级分类" dataIndex="categoryLevel2Id" width="150">
+              <template #default="{ record }">
+                {{ getLevel2Name(record.categoryLevel2Id) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="目录ID" dataIndex="catalogId" width="120" />
+            <a-table-column title="爬取状态" dataIndex="crawlStatus" width="120">
+              <template #default="{ record }">
+                <a-badge
+                  :status="getCrawlStatusBadge(record.crawlStatus)"
+                  :text="getCrawlStatusText(record.crawlStatus)"
+                />
+              </template>
+            </a-table-column>
+            <a-table-column title="爬取进度" width="180">
+              <template #default="{ record }">
+                <div v-if="record.crawlProgress !== null && record.crawlProgress !== undefined">
+                  <a-progress
+                    :percent="record.crawlProgress"
+                    :status="getProgressStatus(record.crawlStatus)"
+                    size="small"
+                  />
+                </div>
+                <span v-else>-</span>
+              </template>
+            </a-table-column>
+            <a-table-column title="产品数量" width="150">
+              <template #default="{ record }">
+                <span v-if="record.totalProducts">
+                  {{ record.crawledProducts || 0 }} / {{ record.totalProducts }}
+                </span>
+                <span v-else>-</span>
+              </template>
+            </a-table-column>
+            <a-table-column title="最后爬取时间" dataIndex="lastCrawlTime" width="180">
+              <template #default="{ record }">
+                {{ formatDateTime(record.lastCrawlTime) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" width="240" fixed="right">
+              <template #default="{ record }">
+                <a-space>
+                  <a-button size="small" @click="handleLevel3Edit(record)">
+                    <template #icon><EditOutlined /></template>
+                    编辑
+                  </a-button>
+                  <a-button size="small" danger @click="handleLevel3Delete(record)">
+                    <template #icon><DeleteOutlined /></template>
+                    删除
+                  </a-button>
+                </a-space>
+              </template>
+            </a-table-column>
+          </a-table>
+        </a-card>
+      </a-tab-pane>
     </a-tabs>
 
     <!-- 新增/编辑一级分类对话框 -->
@@ -420,6 +580,56 @@
               {{ item.categoryLevel1Name }}
             </a-select-option>
           </a-select>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- 新增/编辑三级分类对话框 -->
+    <a-modal v-model:open="showLevel3AddDialog" :title="editingLevel3.id ? '编辑三级分类' : '新增三级分类'" width="600px" @ok="handleSaveLevel3">
+      <a-form
+        ref="level3FormRef"
+        :model="editingLevel3"
+        :rules="level3Rules"
+        :label-col="{ span: 6 }"
+        :wrapper-col="{ span: 18 }"
+      >
+        <a-form-item label="分类名称" name="categoryLevel3Name">
+          <a-input v-model:value="editingLevel3.categoryLevel3Name" placeholder="输入分类名称" />
+        </a-form-item>
+        <a-form-item label="所属一级分类" name="categoryLevel1Id">
+          <a-select
+            v-model:value="editingLevel3.categoryLevel1Id"
+            placeholder="选择一级分类"
+            style="width: 100%"
+            @change="handleLevel3EditLevel1Change"
+          >
+            <a-select-option
+              v-for="item in allLevel1Categories"
+              :key="item.id"
+              :value="item.id"
+            >
+              {{ item.categoryLevel1Name }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="所属二级分类" name="categoryLevel2Id">
+          <a-select
+            v-model:value="editingLevel3.categoryLevel2Id"
+            placeholder="选择二级分类"
+            style="width: 100%"
+            :disabled="!editingLevel3.categoryLevel1Id"
+          >
+            <a-select-option
+              v-for="item in level3EditLevel2Categories"
+              :key="item.id"
+              :value="item.id"
+            >
+              {{ item.categoryLevel2Name }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="目录ID" name="catalogId">
+          <a-input v-model:value="editingLevel3.catalogId" placeholder="输入目录ID" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -615,10 +825,16 @@ import {
   updateCategoryLevel1,
   deleteCategoryLevel1,
   getCategoryLevel2Page,
+  getCategoryLevel2List,
   getCategoryLevel2ListByLevel1Id,
   addCategoryLevel2,
   updateCategoryLevel2,
   deleteCategoryLevel2,
+  getCategoryLevel3List,
+  getCategoryLevel3ListByLevel2Id,
+  addCategoryLevel3,
+  updateCategoryLevel3,
+  deleteCategoryLevel3,
   updateShopCategoryCode
 } from '@/api/category'
 import { getShopList } from '@/api/shop'
@@ -632,7 +848,7 @@ import {
   type CategoryCrawlResult,
   type CategoryPair
 } from '@/api/categoryPatch'
-import type { CategoryLevel1Code, CategoryLevel2Code, Shop } from '@/types'
+import type { CategoryLevel1Code, CategoryLevel2Code, CategoryLevel3Code, Shop } from '@/types'
 
 // V3 API Base URL
 const API_BASE_V3 = '/api/v3/crawler'
@@ -641,15 +857,22 @@ const API_BASE_V3 = '/api/v3/crawler'
 const activeTab = ref('level1')
 const level1Loading = ref(false)
 const level2Loading = ref(false)
+const level3Loading = ref(false)
 const level1TableData = ref<CategoryLevel1Code[]>([])
 const level2TableData = ref<CategoryLevel2Code[]>([])
+const level3TableData = ref<CategoryLevel3Code[]>([])
 const allLevel1Categories = ref<CategoryLevel1Code[]>([])
+const allLevel2Categories = ref<CategoryLevel2Code[]>([])
 const allShops = ref<Shop[]>([])
 const showLevel1AddDialog = ref(false)
 const showLevel2AddDialog = ref(false)
+const showLevel3AddDialog = ref(false)
 const showShopCodeDialog = ref(false)
 const level1FormRef = ref()
 const level2FormRef = ref()
+const level3FormRef = ref()
+const level3Level2Categories = ref<CategoryLevel2Code[]>([])  // 用于搜索表单的二级分类
+const level3EditLevel2Categories = ref<CategoryLevel2Code[]>([])  // 用于编辑表单的二级分类
 const selectedLevel2Category = ref<CategoryLevel2Code | null>(null)
 const shopCodeList = ref<(Shop & { categoryCode: string })[]>([])
 
@@ -700,6 +923,13 @@ const level2SearchForm = reactive({
   crawlStatus: undefined as string | undefined
 })
 
+const level3SearchForm = reactive({
+  categoryName: '',
+  categoryLevel1Id: undefined as number | undefined,
+  categoryLevel2Id: undefined as number | undefined,
+  crawlStatus: undefined as string | undefined
+})
+
 const level1Pagination = reactive({
   current: 1,
   size: 20,
@@ -707,6 +937,12 @@ const level1Pagination = reactive({
 })
 
 const level2Pagination = reactive({
+  current: 1,
+  size: 20,
+  total: 0
+})
+
+const level3Pagination = reactive({
   current: 1,
   size: 20,
   total: 0
@@ -722,6 +958,13 @@ const editingLevel2 = reactive<CategoryLevel2Code>({
   categoryLevel1Id: 0
 })
 
+const editingLevel3 = reactive<CategoryLevel3Code>({
+  categoryLevel3Name: '',
+  catalogId: '',
+  categoryLevel1Id: 0,
+  categoryLevel2Id: 0
+})
+
 // 表单验证规则
 const level1Rules = {
   categoryLevel1Name: [
@@ -735,6 +978,21 @@ const level2Rules = {
   ],
   categoryLevel1Id: [
     { required: true, message: '请选择一级分类', trigger: 'change' }
+  ]
+}
+
+const level3Rules = {
+  categoryLevel3Name: [
+    { required: true, message: '请输入分类名称', trigger: 'blur' }
+  ],
+  categoryLevel1Id: [
+    { required: true, message: '请选择一级分类', trigger: 'change' }
+  ],
+  categoryLevel2Id: [
+    { required: true, message: '请选择二级分类', trigger: 'change' }
+  ],
+  catalogId: [
+    { required: true, message: '请输入目录ID', trigger: 'blur' }
   ]
 }
 
@@ -786,11 +1044,73 @@ const fetchLevel2Data = async () => {
   }
 }
 
+const fetchLevel3Data = async () => {
+  level3Loading.value = true
+  try {
+    // 获取所有三级分类数据
+    let allData: CategoryLevel3Code[] = []
+
+    // 如果选择了二级分类，则获取该二级分类下的三级分类
+    if (level3SearchForm.categoryLevel2Id) {
+      allData = await getCategoryLevel3ListByLevel2Id(level3SearchForm.categoryLevel2Id)
+    } else {
+      // 否则获取所有三级分类
+      allData = await getCategoryLevel3List()
+    }
+
+    // 前端筛选
+    let filteredData = allData
+
+    // 按分类名称筛选
+    if (level3SearchForm.categoryName) {
+      filteredData = filteredData.filter(item =>
+        item.categoryLevel3Name.includes(level3SearchForm.categoryName)
+      )
+    }
+
+    // 按一级分类筛选
+    if (level3SearchForm.categoryLevel1Id) {
+      filteredData = filteredData.filter(item =>
+        item.categoryLevel1Id === level3SearchForm.categoryLevel1Id
+      )
+    }
+
+    // 按爬取状态筛选
+    if (level3SearchForm.crawlStatus) {
+      filteredData = filteredData.filter(item =>
+        item.crawlStatus === level3SearchForm.crawlStatus
+      )
+    }
+
+    // 前端分页
+    const total = filteredData.length
+    const start = (level3Pagination.current - 1) * level3Pagination.size
+    const end = start + level3Pagination.size
+    const paginatedData = filteredData.slice(start, end)
+
+    level3TableData.value = paginatedData
+    level3Pagination.total = total
+  } catch (error) {
+    console.error('获取三级分类数据失败:', error)
+    message.error('获取三级分类数据失败')
+  } finally {
+    level3Loading.value = false
+  }
+}
+
 const loadAllLevel1Categories = async () => {
   try {
     allLevel1Categories.value = await getCategoryLevel1List()
   } catch (error) {
     console.error('获取一级分类列表失败:', error)
+  }
+}
+
+const loadAllLevel2Categories = async () => {
+  try {
+    allLevel2Categories.value = await getCategoryLevel2List()
+  } catch (error) {
+    console.error('获取二级分类列表失败:', error)
   }
 }
 
@@ -805,8 +1125,10 @@ const loadAllShops = async () => {
 const handleTabClick = (key: string) => {
   if (key === 'level1') {
     fetchLevel1Data()
-  } else {
+  } else if (key === 'level2') {
     fetchLevel2Data()
+  } else if (key === 'level3') {
+    fetchLevel3Data()
   }
 }
 
@@ -971,7 +1293,7 @@ const manageShopCodes = (row: CategoryLevel2Code) => {
 
 const saveShopCode = async (shop: Shop & { categoryCode: string }) => {
   if (!selectedLevel2Category.value) return
-  
+
   try {
     await updateShopCategoryCode(
       selectedLevel2Category.value.id!,
@@ -984,10 +1306,135 @@ const saveShopCode = async (shop: Shop & { categoryCode: string }) => {
   }
 }
 
+// 三级分类相关方法
+const handleLevel3Search = () => {
+  level3Pagination.current = 1
+  fetchLevel3Data()
+}
+
+const handleLevel3Reset = () => {
+  level3SearchForm.categoryName = ''
+  level3SearchForm.categoryLevel1Id = undefined
+  level3SearchForm.categoryLevel2Id = undefined
+  level3SearchForm.crawlStatus = undefined
+  level3Pagination.current = 1
+  level3Level2Categories.value = []
+  fetchLevel3Data()
+}
+
+const handleLevel3Level1Change = async (categoryLevel1Id: number | undefined) => {
+  level3SearchForm.categoryLevel2Id = undefined
+  level3Level2Categories.value = []
+
+  if (categoryLevel1Id) {
+    try {
+      level3Level2Categories.value = await getCategoryLevel2ListByLevel1Id(categoryLevel1Id)
+    } catch (error) {
+      console.error('获取二级分类失败:', error)
+      message.error('获取二级分类失败')
+    }
+  }
+}
+
+const handleLevel3Edit = async (row: CategoryLevel3Code) => {
+  Object.assign(editingLevel3, row)
+
+  // 加载对应一级分类的二级分类列表
+  if (row.categoryLevel1Id) {
+    try {
+      level3EditLevel2Categories.value = await getCategoryLevel2ListByLevel1Id(row.categoryLevel1Id)
+    } catch (error) {
+      console.error('获取二级分类失败:', error)
+    }
+  }
+
+  showLevel3AddDialog.value = true
+}
+
+const handleLevel3EditLevel1Change = async (categoryLevel1Id: number) => {
+  editingLevel3.categoryLevel2Id = 0
+  level3EditLevel2Categories.value = []
+
+  if (categoryLevel1Id) {
+    try {
+      level3EditLevel2Categories.value = await getCategoryLevel2ListByLevel1Id(categoryLevel1Id)
+    } catch (error) {
+      console.error('获取二级分类失败:', error)
+      message.error('获取二级分类失败')
+    }
+  }
+}
+
+const handleSaveLevel3 = async () => {
+  if (!level3FormRef.value) return
+
+  try {
+    await level3FormRef.value.validate()
+
+    if (editingLevel3.id) {
+      await updateCategoryLevel3(editingLevel3.id, editingLevel3)
+      message.success('更新三级分类成功')
+    } else {
+      await addCategoryLevel3(editingLevel3)
+      message.success('新增三级分类成功')
+    }
+
+    showLevel3AddDialog.value = false
+    resetEditingLevel3()
+    fetchLevel3Data()
+  } catch (error) {
+    console.error('保存三级分类失败:', error)
+    message.error('保存三级分类失败')
+  }
+}
+
+const resetEditingLevel3 = () => {
+  Object.assign(editingLevel3, {
+    id: undefined,
+    categoryLevel3Name: '',
+    catalogId: '',
+    categoryLevel1Id: 0,
+    categoryLevel2Id: 0
+  })
+  level3EditLevel2Categories.value = []
+}
+
+const handleLevel3Delete = async (row: CategoryLevel3Code) => {
+  Modal.confirm({
+    title: '提示',
+    content: '确定删除此三级分类吗？',
+    onOk: async () => {
+      try {
+        await deleteCategoryLevel3(row.id!)
+        message.success('删除成功')
+        fetchLevel3Data()
+      } catch (error) {
+        message.error('删除失败')
+      }
+    }
+  })
+}
+
+const handleLevel3SizeChange = (current: number, size: number) => {
+  level3Pagination.size = size
+  level3Pagination.current = current
+  fetchLevel3Data()
+}
+
+const handleLevel3CurrentChange = (current: number) => {
+  level3Pagination.current = current
+  fetchLevel3Data()
+}
+
 // 工具方法
 const getLevel1Name = (categoryLevel1Id: number) => {
   const category = allLevel1Categories.value.find(item => item.id === categoryLevel1Id)
   return category ? category.categoryLevel1Name : '-'
+}
+
+const getLevel2Name = (categoryLevel2Id: number) => {
+  const category = allLevel2Categories.value.find(item => item.id === categoryLevel2Id)
+  return category ? category.categoryLevel2Name : '-'
 }
 
 const handleLevel1SizeChange = (current: number, size: number) => {
@@ -1354,6 +1801,7 @@ const getProgressStatus = (crawlStatus: string | undefined): 'success' | 'active
 onMounted(() => {
   fetchLevel1Data()
   loadAllLevel1Categories()
+  loadAllLevel2Categories()
   loadAllShops()
   refreshStats()
 })

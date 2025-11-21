@@ -121,11 +121,12 @@ public class ProductController {
             @RequestParam(required = false) String packageName,
             @RequestParam(required = false) Integer categoryLevel1Id,
             @RequestParam(required = false) Integer categoryLevel2Id,
+            @RequestParam(required = false) Integer categoryLevel3Id,
             @RequestParam(required = false) Boolean hasStock
     ) {
-        IPage<Product> result = productService.getProductPage(current, size, productCode, brand, 
-                                                            model, packageName, categoryLevel1Id, 
-                                                            categoryLevel2Id, hasStock);
+        IPage<Product> result = productService.getProductPage(current, size, productCode, brand,
+                                                            model, packageName, categoryLevel1Id,
+                                                            categoryLevel2Id, categoryLevel3Id, hasStock);
         return Result.page(result.getRecords(), result.getTotal(), current.longValue(), size.longValue());
     }
 

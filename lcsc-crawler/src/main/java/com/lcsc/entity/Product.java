@@ -140,6 +140,11 @@ public class Product {
     private String categoryLevel2Name;
 
     /**
+     * 三级分类名称
+     */
+    private String categoryLevel3Name;
+
+    /**
      * 主图URL（对应CSV中的"主图"）
      */
     private String productImageUrlBig;
@@ -404,6 +409,14 @@ public class Product {
 
     public void setCategoryLevel2Name(String categoryLevel2Name) {
         this.categoryLevel2Name = categoryLevel2Name;
+    }
+
+    public String getCategoryLevel3Name() {
+        return categoryLevel3Name;
+    }
+
+    public void setCategoryLevel3Name(String categoryLevel3Name) {
+        this.categoryLevel3Name = categoryLevel3Name;
     }
 
     public String getProductImageUrlBig() {

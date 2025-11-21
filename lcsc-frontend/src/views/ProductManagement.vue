@@ -52,6 +52,7 @@
             allow-clear
             style="width: 200px"
             :disabled="!searchForm.categoryLevel1Id"
+            @change="handleLevel2Change"
           >
             <a-select-option
               v-for="item in level2Categories"
@@ -60,6 +61,24 @@
               :value="item.id"
             >
               {{ item.categoryLevel2Name }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="三级分类">
+          <a-select
+            v-model:value="searchForm.categoryLevel3Id"
+            placeholder="选择三级分类"
+            allow-clear
+            style="width: 200px"
+            :disabled="!searchForm.categoryLevel2Id"
+          >
+            <a-select-option
+              v-for="item in level3Categories"
+              :key="item.id"
+              :label="item.categoryLevel3Name"
+              :value="item.id"
+            >
+              {{ item.categoryLevel3Name }}
             </a-select-option>
           </a-select>
         </a-form-item>
@@ -174,6 +193,14 @@
           <template #default="{ record }">
             <a-tag v-if="record.categoryLevel2Name" color="cyan" class="category-tag">
               {{ record.categoryLevel2Name }}
+            </a-tag>
+            <span v-else>-</span>
+          </template>
+        </a-table-column>
+        <a-table-column key="categoryLevel3Name" data-index="categoryLevel3Name" title="三级分类" width="120">
+          <template #default="{ record }">
+            <a-tag v-if="record.categoryLevel3Name" color="green" class="category-tag">
+              {{ record.categoryLevel3Name }}
             </a-tag>
             <span v-else>-</span>
           </template>
@@ -663,8 +690,8 @@ import {
   exportProductsCSV,
   downloadExportFile
 } from '@/api/product'
-import { getCategoryLevel1List, getCategoryLevel2ListByLevel1Id } from '@/api/category'
-import type { Product, CategoryLevel1Code, CategoryLevel2Code, ProductResources, ResourceFile } from '@/types'
+import { getCategoryLevel1List, getCategoryLevel2ListByLevel1Id, getCategoryLevel3ListByLevel2Id } from '@/api/category'
+import type { Product, CategoryLevel1Code, CategoryLevel2Code, CategoryLevel3Code, ProductResources, ResourceFile } from '@/types'
 
 const route = useRoute()
 
@@ -688,6 +715,7 @@ const activeResourceTab = ref('all')
 
 const level1Categories = ref<CategoryLevel1Code[]>([])
 const level2Categories = ref<CategoryLevel2Code[]>([])
+const level3Categories = ref<CategoryLevel3Code[]>([])
 const editLevel2Categories = ref<CategoryLevel2Code[]>([])
 
 const searchForm = reactive({
@@ -696,6 +724,7 @@ const searchForm = reactive({
   model: '',
   categoryLevel1Id: undefined as number | undefined,
   categoryLevel2Id: undefined as number | undefined,
+  categoryLevel3Id: undefined as number | undefined,
   hasStock: undefined as boolean | undefined
 })
 
@@ -757,6 +786,7 @@ const fetchData = async () => {
       model: searchForm.model,
       categoryLevel1Id: searchForm.categoryLevel1Id,
       categoryLevel2Id: searchForm.categoryLevel2Id,
+      categoryLevel3Id: searchForm.categoryLevel3Id,
       hasStock: searchForm.hasStock
     }
     console.log('调用产品搜索API，参数:', params)
@@ -798,8 +828,10 @@ const loadCategories = async () => {
 const handleLevel1Change = async (categoryLevel1Id: number | undefined) => {
   console.log('一级分类发生变化:', categoryLevel1Id)
   searchForm.categoryLevel2Id = undefined
+  searchForm.categoryLevel3Id = undefined
   level2Categories.value = []
-  
+  level3Categories.value = []
+
   if (categoryLevel1Id) {
     try {
       console.log('开始加载二级分类数据，一级分类ID:', categoryLevel1Id)
@@ -809,6 +841,23 @@ const handleLevel1Change = async (categoryLevel1Id: number | undefined) => {
     } catch (error) {
       console.error('获取二级分类失败:', error)
       message.error('获取二级分类失败')
+    }
+  }
+}
+
+const handleLevel2Change = async (categoryLevel2Id: number | undefined) => {
+  console.log('二级分类发生变化:', categoryLevel2Id)
+  searchForm.categoryLevel3Id = undefined
+  level3Categories.value = []
+
+  if (categoryLevel2Id) {
+    try {
+      console.log('开始加载三级分类数据，二级分类ID:', categoryLevel2Id)
+      level3Categories.value = await getCategoryLevel3ListByLevel2Id(categoryLevel2Id)
+      console.log('三级分类数据加载成功，数量:', level3Categories.value.length)
+    } catch (error) {
+      console.error('获取三级分类失败:', error)
+      message.error('获取三级分类失败')
     }
   }
 }
@@ -838,8 +887,10 @@ const handleReset = () => {
   searchForm.model = ''
   searchForm.categoryLevel1Id = undefined
   searchForm.categoryLevel2Id = undefined
+  searchForm.categoryLevel3Id = undefined
   searchForm.hasStock = undefined
   level2Categories.value = []
+  level3Categories.value = []
   pagination.current = 1
   fetchData()
 }

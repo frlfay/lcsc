@@ -256,6 +256,16 @@ public class CategoryCrawlerWorkerPool {
                 categoryLevel1Id = level3Category.getCategoryLevel1Id();
                 categoryLevel2Id = level3Category.getCategoryLevel2Id();
 
+                // 同步更新父二级分类状态为PROCESSING（如果还不是）
+                if (categoryLevel2Id != null) {
+                    CategoryLevel2Code parentLevel2 = categoryMapper.selectById(categoryLevel2Id);
+                    if (parentLevel2 != null && !"PROCESSING".equals(parentLevel2.getCrawlStatus())) {
+                        parentLevel2.setCrawlStatus("PROCESSING");
+                        categoryMapper.updateById(parentLevel2);
+                        log.info("Worker-{} 同步更新父二级分类状态: {} -> PROCESSING", workerId, parentLevel2.getCategoryLevel2Name());
+                    }
+                }
+
             } else {
                 log.error("Worker-{} 未知的分类级别: {}", workerId, categoryLevel);
                 return false;
@@ -364,6 +374,10 @@ public class CategoryCrawlerWorkerPool {
                             level3Category.setCrawledProducts(totalSaved);
                             level3Category.setLastCrawlTime(LocalDateTime.now());
                             level3Service.updateById(level3Category);
+                            // 同步更新父二级分类状态
+                            if (categoryLevel2Id != null) {
+                                updateParentLevel2StatusIfNeeded(categoryLevel2Id, workerId);
+                            }
                         }
                         log.info("Worker-{} 已停止，但已爬取 {} 个产品，标记分类为已完成", workerId, totalSaved);
                         return true;  // 返回true，因为已有数据
@@ -376,6 +390,10 @@ public class CategoryCrawlerWorkerPool {
                             level3Category.setCrawlStatus("STOPPED");
                             level3Category.setCrawlProgress(0);
                             level3Service.updateById(level3Category);
+                            // 同步更新父二级分类状态
+                            if (categoryLevel2Id != null) {
+                                updateParentLevel2StatusIfNeeded(categoryLevel2Id, workerId);
+                            }
                         }
                         log.info("Worker-{} 已停止，未爬取任何产品，标记分类为已停止", workerId);
                         return false;
@@ -437,6 +455,11 @@ public class CategoryCrawlerWorkerPool {
                 level3Category.setCrawledProducts(totalSaved);
                 level3Category.setLastCrawlTime(LocalDateTime.now());
                 level3Service.updateById(level3Category);
+
+                // 检查并同步更新父二级分类状态
+                if (categoryLevel2Id != null) {
+                    updateParentLevel2StatusIfNeeded(categoryLevel2Id, workerId);
+                }
             }
 
             // 9. 推送完成事件
@@ -858,6 +881,10 @@ public class CategoryCrawlerWorkerPool {
         if (trimmed.isEmpty()) {
             return null;
         }
+        // 过滤掉包含"null"字符串的URL（立创API可能返回"null"字符串）
+        if (trimmed.equalsIgnoreCase("null") || trimmed.contains(":null")) {
+            return null;
+        }
         if (trimmed.startsWith("//")) {
             return "https:" + trimmed;
         }
@@ -1134,5 +1161,75 @@ public class CategoryCrawlerWorkerPool {
             }
         }
         return defaultValue;
+    }
+
+    /**
+     * 检查并更新父二级分类状态
+     * 当该二级分类下的所有三级分类都完成时，将父二级分类标记为COMPLETED
+     *
+     * @param parentLevel2Id 父二级分类ID
+     * @param workerId Worker ID
+     */
+    private void updateParentLevel2StatusIfNeeded(Integer parentLevel2Id, int workerId) {
+        try {
+            // 查询该二级分类下的所有三级分类
+            List<CategoryLevel3Code> level3List = level3Service.getByLevel2Id(parentLevel2Id);
+
+            if (level3List == null || level3List.isEmpty()) {
+                log.debug("Worker-{} 父二级分类 {} 下没有三级分类", workerId, parentLevel2Id);
+                return;
+            }
+
+            // 统计状态
+            int totalCount = level3List.size();
+            int completedCount = 0;
+            int processingCount = 0;
+            int totalProducts = 0;
+
+            for (CategoryLevel3Code level3 : level3List) {
+                String status = level3.getCrawlStatus();
+                if ("COMPLETED".equals(status)) {
+                    completedCount++;
+                    if (level3.getCrawledProducts() != null) {
+                        totalProducts += level3.getCrawledProducts();
+                    }
+                } else if ("PROCESSING".equals(status) || "IN_QUEUE".equals(status)) {
+                    processingCount++;
+                }
+            }
+
+            // 获取父二级分类
+            CategoryLevel2Code parentLevel2 = categoryMapper.selectById(parentLevel2Id);
+            if (parentLevel2 == null) {
+                log.warn("Worker-{} 父二级分类不存在: {}", workerId, parentLevel2Id);
+                return;
+            }
+
+            log.debug("Worker-{} 检查父二级分类 [{}]: 总计={}, 已完成={}, 处理中={}",
+                workerId, parentLevel2.getCategoryLevel2Name(), totalCount, completedCount, processingCount);
+
+            // 如果所有三级分类都完成了，更新父二级分类为COMPLETED
+            if (completedCount == totalCount) {
+                parentLevel2.setCrawlStatus("COMPLETED");
+                parentLevel2.setCrawlProgress(100);
+                parentLevel2.setCrawledProducts(totalProducts);
+                parentLevel2.setLastCrawlTime(LocalDateTime.now());
+                categoryMapper.updateById(parentLevel2);
+                log.info("Worker-{} 父二级分类 [{}] 下所有三级分类已完成，同步更新状态为COMPLETED，总产品数: {}",
+                    workerId, parentLevel2.getCategoryLevel2Name(), totalProducts);
+            } else if (processingCount == 0 && completedCount < totalCount) {
+                // 如果没有正在处理的，但也不是全部完成，可能是部分STOPPED/FAILED
+                parentLevel2.setCrawlStatus("COMPLETED");
+                parentLevel2.setCrawlProgress(100);
+                parentLevel2.setCrawledProducts(totalProducts);
+                parentLevel2.setLastCrawlTime(LocalDateTime.now());
+                categoryMapper.updateById(parentLevel2);
+                log.info("Worker-{} 父二级分类 [{}] 部分三级分类完成({}个)，标记为COMPLETED，总产品数: {}",
+                    workerId, parentLevel2.getCategoryLevel2Name(), completedCount, totalProducts);
+            }
+
+        } catch (Exception e) {
+            log.error("Worker-{} 更新父二级分类状态失败: parentLevel2Id={}", workerId, parentLevel2Id, e);
+        }
     }
 }

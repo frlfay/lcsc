@@ -4,6 +4,7 @@ export interface Product {
   productCode: string
   categoryLevel1Id: number
   categoryLevel2Id: number
+  categoryLevel3Id?: number
   brand?: string
   model?: string
   packageName?: string
@@ -24,6 +25,7 @@ export interface Product {
   // 扩展字段
   categoryLevel1Name?: string
   categoryLevel2Name?: string
+  categoryLevel3Name?: string
   productImageUrlBig?: string
   pdfUrl?: string
   ladderPrice1Quantity?: number
@@ -86,6 +88,25 @@ export interface CategoryLevel2Code {
   errorMessage?: string
   // 临时UI状态字段
   _crawling?: boolean
+}
+
+// 三级分类类型
+export interface CategoryLevel3Code {
+  id?: number
+  categoryLevel3Name: string
+  catalogId: string
+  categoryLevel1Id: number
+  categoryLevel2Id: number
+  createdAt?: string
+  updatedAt?: string
+  // V3 爬虫相关字段
+  crawlStatus?: 'pending' | 'processing' | 'completed' | 'failed'
+  crawlProgress?: number
+  lastCrawlTime?: string
+  totalProducts?: number
+  crawledProducts?: number
+  currentPage?: number
+  errorMessage?: string
 }
 
 // 图片链接类型
