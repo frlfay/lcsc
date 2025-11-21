@@ -904,6 +904,65 @@ private String generateImageFilename(String productCode, String originalFilename
 
 ---
 
+#### P0-8: PDF命名与开关
+**状态**: ✅ 已完成
+
+**需求**:
+- 命名规则变更：从 `产品编号_品牌_型号.pdf` 改为 `产品编号.pdf`（如 `C123456789.pdf`）
+- 功能开关：新增全局配置项 `crawler.enable-pdf-download`，默认为 `false`（暂停下载）
+
+**实现方案**:
+- **配置文件**：`application.yml` 新增 `crawler.enable-pdf-download: false`
+- **后端逻辑**：
+  - 添加 `@Value("${crawler.enable-pdf-download:false}")` 读取配置
+  - 简化 `generatePdfFilename` 方法，只返回 `产品编号.pdf`
+  - PDF下载逻辑添加开关判断，只在 `enablePdfDownload=true` 时实际下载
+  - 始终保存PDF元数据（文件名、路径、URL），便于后续批量下载
+- **删除代码**：移除未使用的 `cleanBrandName` 方法
+
+**关键文件**:
+- `lcsc-crawler/src/main/resources/application.yml` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java` (MODIFIED)
+
+**核心代码** ([CategoryCrawlerWorkerPool.java:98-99, 814-839](lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategoryCrawlerWorkerPool.java)):
+```java
+// 读取配置
+@Value("${crawler.enable-pdf-download:false}")
+private boolean enablePdfDownload;
+
+// PDF下载逻辑
+if (pdfUrl != null && !pdfUrl.isBlank()) {
+    String normalizedPdfUrl = normalizeAssetUrl(pdfUrl);
+
+    // 生成PDF文件名（新规则：产品编号.pdf）
+    String pdfFilename = generatePdfFilename(product.getProductCode());
+    product.setPdfFilename(pdfFilename);
+    product.setPdfLocalPath(pdfPathStr);
+    product.setPdfUrl(normalizedPdfUrl);
+
+    // 根据配置开关决定是否实际下载PDF
+    if (enablePdfDownload) {
+        fileDownloadService.submitDownloadTask(normalizedPdfUrl, pdfPathStr, "pdf");
+        log.info("Worker 提交PDF下载任务: {} -> {}", pdfFilename, normalizedPdfUrl);
+    } else {
+        log.debug("Worker PDF下载已禁用，跳过下载: {}", pdfFilename);
+    }
+}
+```
+
+**配置使用**:
+```yaml
+# 默认关闭PDF下载（全站爬取阶段）
+crawler:
+  enable-pdf-download: false
+
+# 全站爬取完毕后，可改为true批量下载PDF
+crawler:
+  enable-pdf-download: true
+```
+
+---
+
 ### 🐛 Bug修复记录
 
 #### Bug-1: 产品图片渲染显示占位符
@@ -957,15 +1016,20 @@ WHERE product_image_url_big LIKE '%:null%' OR product_image_url_big = 'null';
 
 ---
 
-### 📋 待完成功能 (P0剩余)
+### 📋 P0功能完成情况
 
 | 序号 | 功能 | 状态 | 备注 |
 |-----|------|------|------|
-| P0-4 | 突破5000条列表限制 | ⏳ 待开发 | 通过筛选参数切片 |
-| P0-5 | 分类名称持久化修复 | ⏳ 待开发 | source_name + custom_name |
-| P0-6 | 价格阶梯扩展(6级) | ⏳ 待开发 | 数据库+解析逻辑 |
-| P0-7 | 图片命名与逻辑重构 | ⏳ 待开发 | 编号_图类.jpg |
-| P0-8 | PDF命名与开关 | ⏳ 待开发 | 产品编号.pdf + 开关配置 |
+| P0-1 | 爬虫选区UI升级 | ✅ 已完成 | 树形结构+默认不全选 |
+| P0-2 | 爬虫选择记忆功能 | ✅ 已完成 | localStorage持久化 |
+| P0-3 | 三级分类兼容性修复 | ✅ 已完成 | 递归遍历+智能任务创建 |
+| P0-4 | 突破5000条列表限制 | ✅ 已完成 | 品牌拆分策略 |
+| P0-5 | 分类名称持久化修复 | ✅ 已完成 | source_name + custom_name |
+| P0-6 | 价格阶梯扩展(6级) | ✅ 已完成 | 数据库+解析逻辑 |
+| P0-7 | 图片命名与逻辑重构 | ✅ 已完成 | 编号_图类.jpg |
+| P0-8 | PDF命名与开关 | ✅ 已完成 | 产品编号.pdf + 开关配置 |
+
+**🎉 P0级功能全部完成！**
 
 ---
 

@@ -95,6 +95,9 @@ public class CategoryCrawlerWorkerPool {
     @Value("${crawler.storage.pdf-dir:pdfs}")
     private String pdfDirName;
 
+    @Value("${crawler.enable-pdf-download:false}")
+    private boolean enablePdfDownload;
+
     private ExecutorService executorService;
     private volatile boolean isRunning = false;
     private int workerThreadCount = 3; // 默认3个线程，可配置
@@ -808,13 +811,14 @@ public class CategoryCrawlerWorkerPool {
             product.setImageLocalPath(null);
         }
 
-        // 处理PDF下载
+        // P0-8: 处理PDF下载（根据配置开关决定是否下载）
         String pdfUrl = (String) productData.get("pdfUrl");
         log.debug("Worker 产品 {} PDF URL: {}", product.getProductCode(), pdfUrl);
         if (pdfUrl != null && !pdfUrl.isBlank()) {
             String normalizedPdfUrl = normalizeAssetUrl(pdfUrl);
 
-            String pdfFilename = generatePdfFilename(product.getProductCode(), product.getBrand(), product.getModel());
+            // 生成PDF文件名（新规则：产品编号.pdf）
+            String pdfFilename = generatePdfFilename(product.getProductCode());
             product.setPdfFilename(pdfFilename);
             Path pdfPath = resolveStoragePath(pdfDirName).resolve(pdfFilename);
 
@@ -822,8 +826,14 @@ public class CategoryCrawlerWorkerPool {
             product.setPdfLocalPath(pdfPathStr);
             // 同步保存远程PDF URL，便于前端直接访问
             product.setPdfUrl(normalizedPdfUrl);
-            fileDownloadService.submitDownloadTask(normalizedPdfUrl, pdfPathStr, "pdf");
-            log.info("Worker 提交PDF下载任务: {} -> {}", pdfFilename, normalizedPdfUrl);
+
+            // 根据配置开关决定是否实际下载PDF
+            if (enablePdfDownload) {
+                fileDownloadService.submitDownloadTask(normalizedPdfUrl, pdfPathStr, "pdf");
+                log.info("Worker 提交PDF下载任务: {} -> {}", pdfFilename, normalizedPdfUrl);
+            } else {
+                log.debug("Worker PDF下载已禁用，跳过下载: {}", pdfFilename);
+            }
         } else {
             log.debug("Worker 产品 {} 没有PDF数据", product.getProductCode());
         }
@@ -1316,22 +1326,11 @@ public class CategoryCrawlerWorkerPool {
     private record ImageSelection(String url, String filename, int priority, int resolution) {}
 
     /**
-     * 生成PDF文件名
+     * P0-8: 生成PDF文件名
+     * 命名规则：产品编号.pdf (如 C123456789.pdf)
      */
-    private String generatePdfFilename(String productCode, String brand, String model) {
-        String cleanBrand = cleanBrandName(brand);
-        String cleanModel = model.replace("-", "");
-        return String.format("%s_%s_%s.pdf", productCode, cleanBrand, cleanModel);
-    }
-
-    /**
-     * 清理品牌名称（将&替换为空格）
-     */
-    private String cleanBrandName(String brandName) {
-        if (brandName == null || brandName.isEmpty()) {
-            return "";
-        }
-        return brandName.replace("&", " ").trim();
+    private String generatePdfFilename(String productCode) {
+        return productCode + ".pdf";
     }
 
     /**

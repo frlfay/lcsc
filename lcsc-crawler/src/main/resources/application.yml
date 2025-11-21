@@ -64,6 +64,7 @@ crawler:
   thread-pool-size: 5  # 线程池大小
   auto-retry: true     # 是否自动重试
   save-images: true    # 是否保存图片
+  enable-pdf-download: false  # 是否下载PDF（默认关闭，待全站爬取完毕后开启）  
   # API地址配置
   api:
     catalog-url: "https://wmsc.lcsc.com/ftps/wm/product/catalogs/search"
