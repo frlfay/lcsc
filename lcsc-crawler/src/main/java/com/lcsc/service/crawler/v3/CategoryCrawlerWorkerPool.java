@@ -770,7 +770,7 @@ public class CategoryCrawlerWorkerPool {
         product.setTierPrices(parseTierPrices(priceList));
         product.setTierPricesLastUpdate(LocalDate.now());
         product.setTierPricesManualEdit(false);
-        // 同步填充拆分后的前5阶梯价字段（数量/价格）
+        // 同步填充拆分后的前6阶梯价字段（数量/价格）
         processLadderPrices(product, priceList);
 
         // --- 处理详细参数 ---
@@ -1163,10 +1163,10 @@ public class CategoryCrawlerWorkerPool {
     }
 
     /**
-     * 将 productPriceList（数组）拆分到产品的 1-5 阶梯数量/价格字段
+     * 将 productPriceList（数组）拆分到产品的 1-6 阶梯数量/价格字段
      * - 数量取 ladder
      * - 价格取 productPrice（字符串），保持与已有处理器一致
-     * - 最多填充前5阶
+     * - 最多填充前6阶
      */
     private void processLadderPrices(Product product, List<Map<String, Object>> priceList) {
         try {
@@ -1181,6 +1181,8 @@ public class CategoryCrawlerWorkerPool {
             product.setLadderPrice4Price(null);
             product.setLadderPrice5Quantity(null);
             product.setLadderPrice5Price(null);
+            product.setLadderPrice6Quantity(null);
+            product.setLadderPrice6Price(null);
 
             if (priceList == null || priceList.isEmpty()) {
                 return;
@@ -1194,7 +1196,7 @@ public class CategoryCrawlerWorkerPool {
                 return Integer.compare(la, lb);
             });
 
-            for (int i = 0; i < Math.min(sorted.size(), 5); i++) {
+            for (int i = 0; i < Math.min(sorted.size(), 6); i++) {
                 Map<String, Object> priceData = sorted.get(i);
                 Object ladder = priceData.get("ladder");
                 // 统一使用 currencyPrice（CNY），回退 productPrice
@@ -1212,6 +1214,7 @@ public class CategoryCrawlerWorkerPool {
                     case 2 -> { product.setLadderPrice3Quantity(quantity); product.setLadderPrice3Price(priceValue); }
                     case 3 -> { product.setLadderPrice4Quantity(quantity); product.setLadderPrice4Price(priceValue); }
                     case 4 -> { product.setLadderPrice5Quantity(quantity); product.setLadderPrice5Price(priceValue); }
+                    case 5 -> { product.setLadderPrice6Quantity(quantity); product.setLadderPrice6Price(priceValue); }
                 }
             }
         } catch (Exception e) {

@@ -737,6 +737,96 @@ ALTER TABLE category_level2_codes ADD UNIQUE KEY uk_catalog_id (catalog_id);
 
 ---
 
+#### P0-5: 分类名称持久化修复
+**状态**: ✅ 已完成
+
+**问题描述**:
+- 用户手动修改的中文分类名称在系统重启后被API同步覆盖
+- 例如：将"Resistor"改为"电阻"后，同步分类时又变回"Resistor"
+
+**实现方案**:
+- **数据库设计**：新增3个字段区分名称来源
+  - `source_name` VARCHAR(200): API源名称（只读备份，每次同步更新）
+  - `custom_name` VARCHAR(200): 用户自定义名称（手动编辑后设置）
+  - `is_customized` TINYINT(1): 是否被用户修改过（0=否，1=是）
+- **同步逻辑**：
+  - 始终更新`source_name`（保留API原始名称作为参考）
+  - 仅当`is_customized=0`时更新`categoryLevelXName`
+  - 当`is_customized=1`时保留`custom_name`，不被API覆盖
+- **API接口**：新增3个编辑名称端点
+  - `PUT /api/categories/level1/{id}/customName`
+  - `PUT /api/categories/level2/{id}/customName`
+  - `PUT /api/categories/level3/{id}/customName`
+- **前端UI**：
+  - 自定义分类显示蓝色"自定义"标签
+  - 显示API源名称（灰色小字）供参考
+  - 添加"编辑名称"按钮打开编辑对话框
+
+**关键文件**:
+- `lcsc-crawler/src/main/resources/db/migration_p0-5_category_name_persistence.sql` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/entity/CategoryLevel1Code.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/entity/CategoryLevel2Code.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/entity/CategoryLevel3Code.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategorySyncService.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/controller/CategoryController.java` (MODIFIED)
+- `lcsc-frontend/src/views/CategoryManagement.vue` (MODIFIED)
+
+**数据库变更**:
+```sql
+-- 为三个级别的分类表添加字段
+ALTER TABLE `category_level1_codes`
+    ADD COLUMN `source_name` VARCHAR(200) NULL COMMENT 'API源名称（只读）',
+    ADD COLUMN `custom_name` VARCHAR(200) NULL COMMENT '用户自定义名称',
+    ADD COLUMN `is_customized` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否被用户修改过';
+
+-- 迁移现有数据
+UPDATE `category_level1_codes`
+SET `source_name` = `category_level1_name`, `is_customized` = 0
+WHERE `source_name` IS NULL;
+
+-- level2和level3同理
+```
+
+**核心逻辑** ([CategorySyncService.java:109-134](lcsc-crawler/src/main/java/com/lcsc/service/crawler/v3/CategorySyncService.java#L109-L134)):
+```java
+// P0-5: Always update source_name from API
+level1.setSourceName(catalogName);
+
+// Only update display name if not customized
+if (level1.getIsCustomized() == null || level1.getIsCustomized() == 0) {
+    level1.setCategoryLevel1Name(catalogName);  // Use API name
+} else {
+    // Preserve custom_name
+    if (level1.getCustomName() != null && !level1.getCustomName().isEmpty()) {
+        level1.setCategoryLevel1Name(level1.getCustomName());
+    }
+    log.debug("保持用户自定义名称: {} (源名称: {})",
+        level1.getCategoryLevel1Name(), catalogName);
+}
+```
+
+**前端显示** ([CategoryManagement.vue:62-74](lcsc-frontend/src/views/CategoryManagement.vue#L62-L74)):
+```vue
+<a-table-column title="分类名称" dataIndex="categoryLevel1Name" width="200">
+  <template #default="{ record }">
+    <div>
+      {{ record.categoryLevel1Name }}
+      <a-tag v-if="record.isCustomized === 1" color="blue">自定义</a-tag>
+    </div>
+    <div v-if="record.isCustomized === 1 && record.sourceName">
+      API源名: {{ record.sourceName }}
+    </div>
+  </template>
+</a-table-column>
+```
+
+**教训**:
+- **区分数据来源**：外部API数据和用户自定义数据应分字段存储
+- **保留原始数据**：保留API原始数据作为参考，便于用户对比
+- **UI可见性**：清晰标识自定义数据，提升用户信任度
+
+---
+
 ### 🐛 Bug修复记录
 
 #### Bug-1: 产品图片渲染显示占位符

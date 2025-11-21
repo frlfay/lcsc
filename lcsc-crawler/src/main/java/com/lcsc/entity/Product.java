@@ -205,6 +205,16 @@ public class Product {
     private java.math.BigDecimal ladderPrice5Price;
 
     /**
+     * 阶梯价6_数量
+     */
+    private Integer ladderPrice6Quantity;
+
+    /**
+     * 阶梯价6_价格
+     */
+    private java.math.BigDecimal ladderPrice6Price;
+
+    /**
      * 产品参数文本格式（对应CSV中的"产品参数"）
      */
     private String parametersText;
@@ -513,6 +523,22 @@ public class Product {
 
     public void setLadderPrice5Price(java.math.BigDecimal ladderPrice5Price) {
         this.ladderPrice5Price = ladderPrice5Price;
+    }
+
+    public Integer getLadderPrice6Quantity() {
+        return ladderPrice6Quantity;
+    }
+
+    public void setLadderPrice6Quantity(Integer ladderPrice6Quantity) {
+        this.ladderPrice6Quantity = ladderPrice6Quantity;
+    }
+
+    public java.math.BigDecimal getLadderPrice6Price() {
+        return ladderPrice6Price;
+    }
+
+    public void setLadderPrice6Price(java.math.BigDecimal ladderPrice6Price) {
+        this.ladderPrice6Price = ladderPrice6Price;
     }
 
     public String getParametersText() {

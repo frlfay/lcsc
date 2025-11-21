@@ -216,6 +216,7 @@
                   <div v-if="record.ladderPrice3Quantity">阶梯3: {{ record.ladderPrice3Quantity }}+ = ￥{{ record.ladderPrice3Price }}</div>
                   <div v-if="record.ladderPrice4Quantity">阶梯4: {{ record.ladderPrice4Quantity }}+ = ￥{{ record.ladderPrice4Price }}</div>
                   <div v-if="record.ladderPrice5Quantity">阶梯5: {{ record.ladderPrice5Quantity }}+ = ￥{{ record.ladderPrice5Price }}</div>
+                  <div v-if="record.ladderPrice6Quantity">阶梯6: {{ record.ladderPrice6Quantity }}+ = ￥{{ record.ladderPrice6Price }}</div>
                 </div>
               </template>
               <span class="price-cell">{{ record.ladderPrice1Quantity }}+: ￥{{ record.ladderPrice1Price }}</span>
@@ -507,6 +508,31 @@
               </a-form-item>
             </a-col>
           </a-row>
+
+          <!-- 阶梯6 -->
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item label="阶梯6 数量" :label-col="{ span: 8 }" :wrapper-col="{ span: 16 }">
+                <a-input-number
+                  v-model:value="editingProduct.ladderPrice6Quantity"
+                  :min="0"
+                  style="width: 100%"
+                  placeholder="起订量"
+                />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item label="阶梯6 价格" :label-col="{ span: 8 }" :wrapper-col="{ span: 16 }">
+                <a-input-number
+                  v-model:value="editingProduct.ladderPrice6Price"
+                  :min="0"
+                  :precision="4"
+                  style="width: 100%"
+                  placeholder="单价 (USD)"
+                />
+              </a-form-item>
+            </a-col>
+          </a-row>
         </div>
       </a-form>
     </a-modal>
@@ -758,7 +784,9 @@ const editingProduct = reactive<Product>({
   ladderPrice4Quantity: undefined,
   ladderPrice4Price: undefined,
   ladderPrice5Quantity: undefined,
-  ladderPrice5Price: undefined
+  ladderPrice5Price: undefined,
+  ladderPrice6Quantity: undefined,
+  ladderPrice6Price: undefined
 })
 
 // 表单验证规则
@@ -953,7 +981,9 @@ const resetEditingProduct = () => {
     ladderPrice4Quantity: undefined,
     ladderPrice4Price: undefined,
     ladderPrice5Quantity: undefined,
-    ladderPrice5Price: undefined
+    ladderPrice5Price: undefined,
+    ladderPrice6Quantity: undefined,
+    ladderPrice6Price: undefined
   })
   editLevel2Categories.value = []
 }
