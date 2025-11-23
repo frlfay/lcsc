@@ -201,7 +201,7 @@ import { PlusOutlined, DownloadOutlined, DeleteOutlined, ReloadOutlined } from '
 import { getAllShops } from '@/api/shop'
 import { getAllCategories } from '@/api/category'
 import { getAllBrands } from '@/api/product'
-import { addToTaskList, exportTaobaoCsv, type ExportTaskItem } from '@/api/export'
+import { addToTaskList, exportTaobaoExcel, type ExportTaskItem } from '@/api/export'
 import type { Shop, CategoryLevel1Code, CategoryLevel2Code, CategoryLevel3Code } from '@/types'
 
 // 筛选表单
@@ -386,7 +386,7 @@ const handleExport = async () => {
 
   exportLoading.value = true
   try {
-    await exportTaobaoCsv(taskList.value)
+    await exportTaobaoExcel(taskList.value)
     message.success('导出成功')
   } catch (error: any) {
     message.error('导出失败: ' + (error.message || '未知错误'))

@@ -52,16 +52,16 @@ export const addToTaskList = (request: AddTaskRequest): Promise<ExportTaskItem[]
 }
 
 /**
- * 导出任务列表为淘宝CSV格式
+ * 导出任务列表为淘宝Excel格式
  */
-export const exportTaobaoCsv = async (tasks: ExportTaskItem[]): Promise<void> => {
-  const response = await api.post('/export/export-taobao-csv', tasks, {
+export const exportTaobaoExcel = async (tasks: ExportTaskItem[]): Promise<void> => {
+  const response = await api.post('/export/export-taobao-excel', tasks, {
     responseType: 'blob'
   })
 
   // 创建下载链接
   const blob = new Blob([response as any], {
-    type: 'text/csv;charset=utf-8'
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   })
   const url = window.URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -71,7 +71,7 @@ export const exportTaobaoCsv = async (tasks: ExportTaskItem[]): Promise<void> =>
   const now = new Date()
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '') + '_' +
                   now.toTimeString().slice(0, 8).replace(/:/g, '')
-  link.download = `淘宝导入_${dateStr}.csv`
+  link.download = `${dateStr}.xlsx`
 
   document.body.appendChild(link)
   link.click()

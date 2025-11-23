@@ -56,31 +56,63 @@ public class AdvancedExportController {
     }
 
     /**
-     * 导出任务列表为淘宝CSV格式
+     * 导出任务列表为淘宝Excel格式
      * @param tasks 任务列表
-     * @return CSV文件字节流
+     * @return Excel文件字节流
      */
-    @PostMapping("/export-taobao-csv")
-    public ResponseEntity<byte[]> exportTaobaoCsv(@RequestBody List<ExportTaskItem> tasks) {
+    @PostMapping("/export-taobao-excel")
+    public ResponseEntity<byte[]> exportTaobaoExcel(@RequestBody List<Map<String, Object>> tasksRaw) {
         try {
-            // 生成淘宝CSV
-            byte[] csvBytes = advancedExportService.generateTaobaoCsv(tasks);
+            // 手动转换任务列表
+            List<ExportTaskItem> tasks = tasksRaw.stream().map(taskMap -> {
+                ExportTaskItem task = new ExportTaskItem();
+                if (taskMap.containsKey("productCode")) {
+                    task.setProductCode((String) taskMap.get("productCode"));
+                }
+                if (taskMap.containsKey("model")) {
+                    task.setModel((String) taskMap.get("model"));
+                }
+                if (taskMap.containsKey("brand")) {
+                    task.setBrand((String) taskMap.get("brand"));
+                }
+                if (taskMap.containsKey("shopId")) {
+                    task.setShopId(((Number) taskMap.get("shopId")).intValue());
+                }
+                if (taskMap.containsKey("shopName")) {
+                    task.setShopName((String) taskMap.get("shopName"));
+                }
+                if (taskMap.containsKey("discounts")) {
+                    @SuppressWarnings("unchecked")
+                    List<Number> discountNumbers = (List<Number>) taskMap.get("discounts");
+                    List<BigDecimal> discounts = discountNumbers.stream()
+                            .map(n -> new BigDecimal(n.toString()))
+                            .collect(Collectors.toList());
+                    task.setDiscounts(discounts);
+                }
+                if (taskMap.containsKey("addedAt")) {
+                    task.setAddedAt(((Number) taskMap.get("addedAt")).longValue());
+                }
+                return task;
+            }).collect(Collectors.toList());
+
+            // 生成淘宝Excel
+            byte[] excelBytes = advancedExportService.generateTaobaoExcel(tasks);
 
             // 生成文件名
             String dateStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            String filename = "淘宝导入_" + dateStr + ".csv";
+            String filename = dateStr + ".xlsx";
             String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8);
 
             // 设置响应头
             HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.parseMediaType("text/csv"));
+            headers.setContentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
             headers.set(HttpHeaders.CONTENT_DISPOSITION,
                     "attachment; filename=\"" + encodedFilename + "\"; filename*=UTF-8''" + encodedFilename);
-            headers.setContentLength(csvBytes.length);
+            headers.setContentLength(excelBytes.length);
 
             return ResponseEntity.ok()
                     .headers(headers)
-                    .body(csvBytes);
+                    .body(excelBytes);
 
         } catch (IOException e) {
             return ResponseEntity.internalServerError().build();

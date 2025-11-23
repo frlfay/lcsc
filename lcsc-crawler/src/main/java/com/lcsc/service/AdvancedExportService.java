@@ -20,6 +20,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+
 /**
  * 高级导出服务 - 淘宝CSV格式
  */
@@ -150,6 +153,183 @@ public class AdvancedExportService {
 
         log.info("淘宝CSV文件生成完成");
         return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 生成淘宝Excel文件
+     * @param tasks 任务列表
+     * @return Excel文件字节数组
+     */
+    public byte[] generateTaobaoExcel(List<ExportTaskItem> tasks) throws IOException {
+        log.info("开始生成淘宝Excel文件, 任务数量: {}", tasks.size());
+
+        // 1. 查询所有产品详情
+        Set<String> productCodes = tasks.stream()
+                .map(ExportTaskItem::getProductCode)
+                .collect(Collectors.toSet());
+
+        List<Product> products = productMapper.selectList(
+                new LambdaQueryWrapper<Product>()
+                        .in(Product::getProductCode, productCodes)
+        );
+
+        Map<String, Product> productMap = products.stream()
+                .collect(Collectors.toMap(Product::getProductCode, p -> p));
+
+        // 2. 查询所有图片链接
+        Map<String, Map<Integer, String>> imageLinkMap = loadImageLinks();
+
+        // 3. 查询所有店铺信息
+        Set<Integer> shopIds = tasks.stream()
+                .map(ExportTaskItem::getShopId)
+                .collect(Collectors.toSet());
+
+        List<Shop> shops = shopMapper.selectBatchIds(shopIds);
+        Map<Integer, Shop> shopMap = shops.stream()
+                .collect(Collectors.toMap(Shop::getId, s -> s));
+
+        // 4. 创建Excel工作簿
+        try (Workbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+
+            Sheet sheet = workbook.createSheet("淘宝导入");
+
+            // 创建表头（第1-3行）
+            createExcelHeader(sheet);
+
+            // 创建产品数据行（从第4行开始，rowIndex=3）
+            int rowIndex = 3;
+            for (ExportTaskItem task : tasks) {
+                Product product = productMap.get(task.getProductCode());
+                if (product == null) {
+                    log.warn("产品不存在: {}", task.getProductCode());
+                    continue;
+                }
+
+                Shop shop = shopMap.get(task.getShopId());
+                if (shop == null) {
+                    log.warn("店铺不存在: {}", task.getShopId());
+                    continue;
+                }
+
+                createProductRow(sheet, rowIndex++, product, shop, task, imageLinkMap);
+            }
+
+            workbook.write(outputStream);
+            log.info("淘宝Excel文件生成完成");
+            return outputStream.toByteArray();
+        }
+    }
+
+    /**
+     * 创建Excel表头（第1-3行）
+     */
+    private void createExcelHeader(Sheet sheet) {
+        // 第1行：版本信息
+        Row row1 = sheet.createRow(0);
+        row1.createCell(0).setCellValue("version 1.00");
+        row1.createCell(1).setCellValue("Excel由系统导出");
+
+        // 第2行：英文列名
+        Row row2 = sheet.createRow(1);
+        String[] englishHeaders = {"title", "cid", "seller_cids", "stuff_status", "location_state", "location_city", "item_type", "price", "auction_increment", "num", "valid_thru", "freight_payer", "post_fee", "ems_fee", "express_fee", "has_invoice", "has_warranty", "approve_status", "has_showcase", "list_time", "description", "cateProps", "postage_id", "has_discount", "modified", "upload_fail_msg", "picture_status", "auction_point", "picture", "video", "skuProps", "inputPids", "inputValues", "outer_id", "propAlias", "auto_fill", "num_id", "local_cid", "navigation_type", "user_name", "syncStatus", "is_lighting_consigment", "is_xinpin", "foodparame", "features", "buyareatype", "global_stock_type", "global_stock_country", "sub_stock_type", "item_size", "item_weight", "sell_promise", "custom_design_flag", "wireless_desc", "barcode", "sku_barcode", "newprepay", "subtitle", "cpv_memo", "input_custom_cpv", "qualification", "add_qualification", "o2o_bind_service", "departure_place", "car_cascade", "legal_customs", "exSkuProps", "deliveryTimeType", "tbDeliveryTime", "nutrientTable", "exFoodParam", "item_volumn", "image_video_type", "shopping_title", "ysbCheckTask", "subStock", "multiDiscountPromotion", "shopping_title2", "useSizeMapping", "sizeMapping", "shippingArea"};
+        for (int i = 0; i < englishHeaders.length; i++) {
+            row2.createCell(i).setCellValue(englishHeaders[i]);
+        }
+
+        // 第3行：中文列名
+        Row row3 = sheet.createRow(2);
+        String[] chineseHeaders = {"宝贝名称", "宝贝类目", "店铺类目", "新旧程度", "省", "城市", "出售方式", "宝贝价格", "加价幅度", "宝贝数量", "有效期", "运费承担", "平邮", "EMS", "快递", "发票", "保修", "放入仓库", "橱柜推荐", "开始时间", "宝贝描述", "宝贝属性", "邮费模板ID", "会员打折", "修改时间", "上传状态", "图片状态", "返点比例", "新图片", "视频", "销售属性组合", "用户输入ID串", "用户输入名-值对", "商家编码", "销售属性别名", "代充类型", "数字ID", "本地ID", "宝贝分类", "用户名称", "宝贝状态", "闪电发货", "新品", "食品专项", "尺码库", "采购地", "库存类型", "国家地区", "库存计数", "物流体积", "物流重量", "退换货承诺", "定制工具", "无线详情", "商品条形码", "sku 条形码", "7天退货", "宝贝卖点", "属性值备注", "自定义属性值", "商品资质", "增加商品资质", "关联线下服务", "发货地", "汽车品牌", "报关方式", "扩展Sku", "发货时效", "预售时间", "成份表", "扩展食品安全", "物流体积", "主图视频比例", "导购标题", "商品预检", "拍下减库存", "多件优惠", "导购标题2", "使用商品尺寸表", "商品尺寸表", "新发货地"};
+        for (int i = 0; i < chineseHeaders.length; i++) {
+            row3.createCell(i).setCellValue(chineseHeaders[i]);
+        }
+    }
+
+    /**
+     * 创建产品数据行
+     */
+    private void createProductRow(Sheet sheet, int rowIndex, Product product, Shop shop,
+                                   ExportTaskItem task, Map<String, Map<Integer, String>> imageLinkMap) {
+        Row row = sheet.createRow(rowIndex);
+        int col = 0;
+
+        // 0. title: 型号、封装 三级分类、二级分类、一级分类
+        row.createCell(col++).setCellValue(buildTitle(product));
+
+        // 1. cid: 固定值
+        row.createCell(col++).setCellValue(FIXED_CID);
+
+        // 2. seller_cids: 店铺分类码
+        row.createCell(col++).setCellValue(shop.getId() + ";");
+
+        // 3-6. stuff_status, location_state, location_city, item_type: 空
+        col += 4;
+
+        // 7. price: 最高阶价格*折扣
+        BigDecimal price = calculatePrice(product, task.getDiscounts());
+        row.createCell(col++).setCellValue(price.doubleValue());
+
+        // 8. auction_increment: 空
+        col++;
+
+        // 9. num: (阶梯级数+2)*1000000
+        int ladderCount = getLadderCount(product);
+        int num = (ladderCount + 2) * 1000000;
+        row.createCell(col++).setCellValue(num);
+
+        // 10-14. valid_thru~express_fee: 空
+        col += 5;
+
+        // 15. has_invoice: 0
+        row.createCell(col++).setCellValue(0);
+
+        // 16. has_warranty: 0
+        row.createCell(col++).setCellValue(0);
+
+        // 17. approve_status: 空
+        col++;
+
+        // 18. has_showcase: 1
+        row.createCell(col++).setCellValue(1);
+
+        // 19. list_time: 空
+        col++;
+
+        // 20. description: 0
+        row.createCell(col++).setCellValue(0);
+
+        // 21. description: <p>参数名:参数值</p>格式
+        row.createCell(col++).setCellValue(buildDescription(product));
+
+        // 22. cateProps: 选项编号组合
+        row.createCell(col++).setCellValue(buildCateProps(ladderCount));
+
+        // 23. postage_id: 店铺运费模板ID
+        row.createCell(col++).setCellValue(shop.getShippingTemplateId() != null ? shop.getShippingTemplateId() : "");
+
+        // 24-27. has_discount~auction_point: 空
+        col += 4;
+
+        // 28. picture: :1:0:|+图片链接
+        row.createCell(col++).setCellValue(buildPicture(product, shop.getId(), imageLinkMap));
+
+        // 29. video: 空
+        col++;
+
+        // 30. skuProps: 价格:1000000::选项编号组合
+        row.createCell(col++).setCellValue(buildSkuProps(product, task.getDiscounts(), ladderCount));
+
+        // 31-33. inputPids, inputValues, outer_id前的空
+        col += 2;
+
+        // 34. outer_id: 品牌（&替换为空格）
+        String outerId = product.getBrand() != null ? product.getBrand().replace("&", " ") : "";
+        row.createCell(col++).setCellValue(outerId);
+
+        // 35. propAlias: 选项编号:买X-Y个选这个组合
+        row.createCell(col++).setCellValue(buildPropAlias(product, ladderCount));
+
+        // 36-79. 剩余字段全部为空（不需要创建）
     }
 
     // ==================== 私有辅助方法 ====================
