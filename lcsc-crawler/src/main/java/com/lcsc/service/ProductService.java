@@ -237,4 +237,17 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
             }
         }
     }
+
+    /**
+     * 获取所有品牌列表（去重排序）
+     */
+    public List<String> getAllBrands() {
+        List<Product> products = baseMapper.selectList(null);
+        return products.stream()
+                .map(Product::getBrand)
+                .filter(brand -> brand != null && !brand.isEmpty())
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
+    }
 }

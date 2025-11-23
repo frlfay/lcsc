@@ -430,4 +430,17 @@ public class ProductController {
                 }
             });
     }
+
+    /**
+     * 获取所有品牌列表
+     */
+    @GetMapping("/products/brands")
+    public Result<List<String>> getAllBrands() {
+        try {
+            List<String> brands = productService.getAllBrands();
+            return Result.success(brands);
+        } catch (Exception e) {
+            return Result.error("获取品牌列表失败: " + e.getMessage());
+        }
+    }
 }

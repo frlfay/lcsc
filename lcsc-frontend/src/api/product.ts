@@ -291,3 +291,8 @@ export const getStoragePaths = () => {
     }
   }>('/v3/crawler/storage-paths')
 }
+
+// 获取所有品牌列表
+export const getAllBrands = (): Promise<string[]> => {
+  return api.get<string[]>('/products/brands')
+}

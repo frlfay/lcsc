@@ -1,115 +1,64 @@
 package com.lcsc.dto;
 
+import lombok.Data;
 import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 高级导出请求DTO
+ * 高级导出请求DTO - 淘宝CSV格式
+ * 用于批量添加模式的筛选条件
  */
+@Data
 public class AdvancedExportRequest {
 
     /**
-     * 选择的店铺ID列表
+     * 选择的店铺ID（单选，必填）
+     * 用于关联运费模板、店铺分类码
      */
-    private List<Integer> shopIds;
+    private Integer shopId;
 
     /**
-     * 产品筛选条件 - 分类ID列表（二级或三级分类）
+     * 一级分类ID（可选）
      */
-    private List<Integer> categoryIds;
+    private Integer categoryLevel1Id;
 
     /**
-     * 产品筛选条件 - 品牌列表
+     * 二级分类ID（可选）
      */
-    private List<String> brands;
+    private Integer categoryLevel2Id;
 
     /**
-     * 产品筛选条件 - 产品编号列表（精确匹配）
+     * 三级分类ID（可选）
      */
-    private List<String> productCodes;
+    private Integer categoryLevel3Id;
 
     /**
-     * 产品筛选条件 - 关键词搜索（模糊匹配型号、品牌）
+     * 品牌名称（可选，单选）
      */
-    private String keyword;
+    private String brand;
 
     /**
-     * 价格折扣率（如0.9表示9折）
+     * 是否有图片（可选）
+     * - true: 只选有图片的产品
+     * - false: 只选无图片的产品
+     * - null: 不限
      */
-    private BigDecimal discountRate;
+    private Boolean hasImage;
 
     /**
-     * 是否包含图片链接
+     * 库存最小值（可选）
      */
-    private Boolean includeImageLinks;
+    private Integer stockMin;
 
     /**
-     * 是否包含阶梯价格
+     * 库存最大值（可选）
      */
-    private Boolean includeLadderPrices;
+    private Integer stockMax;
 
-    // Getters and Setters
-    public List<Integer> getShopIds() {
-        return shopIds;
-    }
-
-    public void setShopIds(List<Integer> shopIds) {
-        this.shopIds = shopIds;
-    }
-
-    public List<Integer> getCategoryIds() {
-        return categoryIds;
-    }
-
-    public void setCategoryIds(List<Integer> categoryIds) {
-        this.categoryIds = categoryIds;
-    }
-
-    public List<String> getBrands() {
-        return brands;
-    }
-
-    public void setBrands(List<String> brands) {
-        this.brands = brands;
-    }
-
-    public List<String> getProductCodes() {
-        return productCodes;
-    }
-
-    public void setProductCodes(List<String> productCodes) {
-        this.productCodes = productCodes;
-    }
-
-    public String getKeyword() {
-        return keyword;
-    }
-
-    public void setKeyword(String keyword) {
-        this.keyword = keyword;
-    }
-
-    public BigDecimal getDiscountRate() {
-        return discountRate;
-    }
-
-    public void setDiscountRate(BigDecimal discountRate) {
-        this.discountRate = discountRate;
-    }
-
-    public Boolean getIncludeImageLinks() {
-        return includeImageLinks;
-    }
-
-    public void setIncludeImageLinks(Boolean includeImageLinks) {
-        this.includeImageLinks = includeImageLinks;
-    }
-
-    public Boolean getIncludeLadderPrices() {
-        return includeLadderPrices;
-    }
-
-    public void setIncludeLadderPrices(Boolean includeLadderPrices) {
-        this.includeLadderPrices = includeLadderPrices;
-    }
+    /**
+     * 6级价格折扣配置（百分比，必填）
+     * 例如：[90, 88, 85, 82, 80, 78] 表示一级打9折，二级打88折...
+     * 数组长度必须为6
+     */
+    private List<BigDecimal> discounts;
 }

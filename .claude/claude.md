@@ -1175,100 +1175,126 @@ image_links表支持 One-to-Many 关系：
 
 ### ✅ 已完成功能 (2025-11-21)
 
-#### P2-1: 高级导出独立模块
+#### P2-1: 高级导出独立模块 - 淘宝CSV格式（批量添加模式）
 **状态**: ✅ 已完成
 
-**需求描述**:
-- 独立配置页面，支持多维度筛选导出
-- 筛选维度：店铺选择、分类筛选、品牌筛选、关键词搜索、价格折扣设置
-- 导出内容：聚合数据（店铺运费模板、分类码、自定义图片链接、基础产品信息、阶梯价格）
+**需求变更**:
+- 从"即时筛选+Excel导出"模式改为"批量添加+淘宝CSV导出"模式
+- 导出格式：从Excel改为淘宝CSV（80列固定格式）
+- 操作流程：筛选 → 添加到任务列表 → 重复筛选添加 → 统一导出
 
 **实现方案**:
 
 **后端架构**:
-- **DTO**: [AdvancedExportRequest.java](lcsc-crawler/src/main/java/com/lcsc/dto/AdvancedExportRequest.java)
-  - shopIds: 店铺ID列表
-  - categoryIds: 分类ID列表（二级/三级）
-  - brands: 品牌列表
-  - keyword: 关键词搜索
-  - discountRate: 折扣率（如0.9表示9折）
-  - includeImageLinks: 是否包含图片链接
-  - includeLadderPrices: 是否包含阶梯价格
+- **DTO**:
+  - [ExportTaskItem.java](lcsc-crawler/src/main/java/com/lcsc/dto/ExportTaskItem.java): 任务项实体（productCode, model, brand, shopId, shopName, discounts, addedAt）
+  - [AdvancedExportRequest.java](lcsc-crawler/src/main/java/com/lcsc/dto/AdvancedExportRequest.java): 筛选条件（shopId单选, categoryLevel1/2/3Id, brand单选, hasImage, stockMin/Max, 6级discounts）
 
 - **Service**: [AdvancedExportService.java](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java)
-  - `getExportPreview()`: 预览统计信息（产品数、店铺数、分类数、品牌数）
-  - `generateExport()`: 生成Excel工作簿
-  - 动态列生成：基础列 + 阶梯价格列(可选) + 店铺列(运费模板+图片链接)
+  - `addToTaskList()`: 添加产品到任务列表，按productCode去重
+  - `generateTaobaoCsv()`: 生成淘宝CSV（80列），包含头部3行+数据行
+  - CSV字段生成方法：
+    - `buildTitle()`: "型号、封装 三级分类、二级分类、一级分类"
+    - `calculatePrice()`: 最高阶价格*折扣，向上取整2位小数
+    - `buildDescription()`: `<p>参数名:参数值</p>`格式
+    - `buildCateProps()`: 选项编号组合（1627207:-1001; ... ;1627207:-100(N+2);）
+    - `buildPicture()`: `:1:0:|`+图片链接（优先自定义链接，fallback立创原图）
+    - `buildSkuProps()`: 价格1:1000000::1627207:-1001; ... （N+2级）
+    - `buildPropAlias()`: 选项编号:买X-Y个选这个; ...
+  - 阶梯价格辅助方法：`getLadderCount()`, `getLadderPriceByIndex()`, `getLadderQuantityByIndex()`
 
 - **Controller**: [AdvancedExportController.java](lcsc-crawler/src/main/java/com/lcsc/controller/AdvancedExportController.java)
-  - `POST /api/export/preview`: 获取导出预览
-  - `POST /api/export/advanced`: 执行导出，返回Excel字节流
+  - `POST /api/export/add-task`: 添加产品到任务列表
+  - `POST /api/export/export-taobao-csv`: 导出任务列表为淘宝CSV
 
 **前端架构**:
 - **API**: [export.ts](lcsc-frontend/src/api/export.ts)
-  - `getExportPreview()`: 调用预览接口
-  - `exportAdvanced()`: 调用导出接口，处理Blob下载
+  - `ExportTaskItem`: 任务项类型定义
+  - `AddTaskRequest`: 添加任务请求类型
+  - `addToTaskList()`: 调用添加任务接口
+  - `exportTaobaoCsv()`: 调用导出接口，处理CSV Blob下载
 
 - **页面**: [AdvancedExport.vue](lcsc-frontend/src/views/AdvancedExport.vue)
-  - 店铺多选（a-select mode="multiple"）
-  - 分类树选择（a-tree-select tree-checkable）
-  - 品牌标签输入（a-select mode="tags"）
-  - 关键词搜索（a-input）
-  - 折扣百分比（a-input-number）
-  - 导出选项复选框
-  - 预览统计卡片
+  - 筛选区域：
+    - 店铺单选下拉框
+    - 级联分类选择（一级 → 二级 → 三级）
+    - 品牌单选下拉框（支持搜索）
+    - 是否有图片下拉框（全部/有图片/无图片）
+    - 库存范围（最小值-最大值）
+    - 6个独立折扣输入框（默认90, 88, 85, 82, 80, 78）
+  - 操作按钮：确定添加、重置筛选
+  - 任务列表表格：显示已添加的产品（序号、产品编号、型号、品牌、店铺、折扣配置、添加时间、操作）
+  - 导出按钮：确定导出、清空列表
 
-**Excel导出格式**:
+**淘宝CSV格式（80列）**:
 ```
-| 产品编号 | 品牌 | 型号 | 封装 | 一级分类 | 二级分类 | 库存 | 阶梯1数量 | 阶梯1价格 | ... | 店铺A-运费模板 | 店铺A-图片链接 | 店铺B-运费模板 | ...
+第1行：version 1.00,Csv由Tbup理货员导出,...
+第2行：英文列名（title,cid,seller_cids,stuff_status,...）
+第3行：中文列名（宝贝名称,宝贝类目,店铺类目,新旧程度,...）
+第4行起：产品数据
 ```
+
+**关键字段说明**:
+- **title**: 型号、封装 三级分类、二级分类、一级分类
+- **cid**: 固定值 50018871
+- **seller_cids**: 店铺二级分类码（shop.id;）
+- **price**: 最高阶价格*第1级折扣，向上取整2位
+- **num**: (阶梯级数+2)*1000000
+- **cateProps**: 1627207:-1001;1627207:-1002;...; (N+2个选项)
+- **picture**: :1:0:|+图片链接
+- **skuProps**: 价格:1000000::选项编号; （N+2级，额外2级用第1阶价格）
+- **propAlias**: 选项编号:买X-Y个选这个; （最后2个固定为"选数量相符的选项"和"买多少个填多少件"）
 
 **关键文件**:
-- `lcsc-crawler/src/main/java/com/lcsc/dto/AdvancedExportRequest.java` (NEW)
-- `lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java` (NEW)
-- `lcsc-crawler/src/main/java/com/lcsc/controller/AdvancedExportController.java` (NEW)
-- `lcsc-frontend/src/api/export.ts` (NEW)
-- `lcsc-frontend/src/views/AdvancedExport.vue` (NEW)
-- `lcsc-frontend/src/router/index.ts` (MODIFIED - 添加路由)
-- `lcsc-frontend/src/App.vue` (MODIFIED - 添加菜单项)
+- `lcsc-crawler/src/main/java/com/lcsc/dto/ExportTaskItem.java` (NEW)
+- `lcsc-crawler/src/main/java/com/lcsc/dto/AdvancedExportRequest.java` (MODIFIED)
+- `lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java` (REWRITTEN)
+- `lcsc-crawler/src/main/java/com/lcsc/controller/AdvancedExportController.java` (REWRITTEN)
+- `lcsc-frontend/src/api/export.ts` (REWRITTEN)
+- `lcsc-frontend/src/views/AdvancedExport.vue` (REWRITTEN)
 
 **核心逻辑**:
 
-动态Excel列生成 ([AdvancedExportService.java:151-198](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L151-L198)):
+淘宝CSV头部生成 ([AdvancedExportService.java:215-226](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L215-L226)):
 ```java
-// 基础列
-String[] baseHeaders = {"产品编号", "品牌", "型号", "封装", "一级分类", "二级分类", "库存"};
+private void appendCsvHeader(StringBuilder csv) {
+    // 第1行：版本信息
+    csv.append("version 1.00,Csv由Tbup理货员导出,");
+    for (int i = 0; i < 78; i++) csv.append(",");
+    csv.append("\n");
 
-// 阶梯价格列（可选）
-if (Boolean.TRUE.equals(request.getIncludeLadderPrices())) {
-    for (int i = 1; i <= 6; i++) {
-        headerRow.createCell(colIndex++).setCellValue("阶梯" + i + "数量");
-        headerRow.createCell(colIndex++).setCellValue("阶梯" + i + "价格");
-    }
+    // 第2行：英文列名
+    csv.append("title,cid,seller_cids,...");
+
+    // 第3行：中文列名
+    csv.append("宝贝名称,宝贝类目,店铺类目,...");
 }
+```
 
-// 店铺相关列（动态）
-for (Shop shop : shops) {
-    headerRow.createCell(colIndex++).setCellValue(shop.getShopName() + "-运费模板");
-    if (Boolean.TRUE.equals(request.getIncludeImageLinks())) {
-        headerRow.createCell(colIndex++).setCellValue(shop.getShopName() + "-图片链接");
+阶梯价格N→N+2转换 ([AdvancedExportService.java:396-427](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L396-L427)):
+```java
+private String buildSkuProps(Product product, List<BigDecimal> discounts, int ladderCount) {
+    int totalOptions = ladderCount + 2;
+
+    for (int i = 0; i < totalOptions; i++) {
+        BigDecimal price;
+        if (i < ladderCount) {
+            price = getLadderPriceByIndex(product, i + 1);  // 实际阶梯价
+        } else {
+            price = getLadderPriceByIndex(product, 1);  // 额外2级用第1阶价格
+        }
+
+        // 应用对应级别的折扣
+        BigDecimal discount = discounts.get(Math.min(i, discounts.size() - 1))
+                .divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
+        BigDecimal finalPrice = price.multiply(discount).setScale(5, RoundingMode.HALF_UP);
+
+        props.append(finalPrice).append(":1000000::").append(OPTION_CODE_PREFIX).append(i + 1).append(";");
     }
 }
 ```
 
-价格折扣应用 ([AdvancedExportService.java:308-317](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L308-L317)):
-```java
-private void createPriceCell(Row row, int col, BigDecimal price, BigDecimal discountRate, CellStyle style) {
-    if (price == null) {
-        cell.setCellValue("");
-    } else {
-        BigDecimal discountedPrice = price.multiply(discountRate).setScale(4, RoundingMode.HALF_UP);
-        cell.setCellValue(discountedPrice.doubleValue());
-    }
-}
-```
-
-图片链接Fallback逻辑 ([AdvancedExportService.java:233-244](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L233-L244)):
+图片链接Fallback逻辑 ([AdvancedExportService.java:374-391](lcsc-crawler/src/main/java/com/lcsc/service/AdvancedExportService.java#L374-L391)):
 ```java
 // 优先使用自定义图片链接（image_links表）
 if (product.getImageName() != null && imageLinkMap.containsKey(product.getImageName())) {
@@ -1283,6 +1309,43 @@ if ((imageLink == null || imageLink.isEmpty()) && product.getProductImageUrlBig(
 }
 ```
 
+前端级联分类选择 ([AdvancedExport.vue:303-334](lcsc-frontend/src/views/AdvancedExport.vue#L303-L334)):
+```typescript
+// 一级分类变化事件
+const handleLevel1Change = (value: number | undefined) => {
+  filterForm.categoryLevel2Id = undefined
+  filterForm.categoryLevel3Id = undefined
+  level2Options.value = []
+  level3Options.value = []
+
+  if (value) {
+    // 筛选二级分类
+    level2Options.value = level2List.value
+      .filter((cat: CategoryLevel2Code) => cat.categoryLevel1Id === value)
+      .map((cat: CategoryLevel2Code) => ({
+        label: cat.categoryLevel2Name,
+        value: cat.id
+      }))
+  }
+}
+
+// 二级分类变化事件
+const handleLevel2Change = (value: number | undefined) => {
+  filterForm.categoryLevel3Id = undefined
+  level3Options.value = []
+
+  if (value) {
+    // 筛选三级分类
+    level3Options.value = level3List.value
+      .filter((cat: CategoryLevel3Code) => cat.categoryLevel2Id === value)
+      .map((cat: CategoryLevel3Code) => ({
+        label: cat.categoryLevel3Name,
+        value: cat.id
+      }))
+  }
+}
+```
+
 **图片链接来源优先级**：
 1. **优先**：`image_links` 表的自定义链接（平台专属，用户上传到各电商图床后导入）
 2. **备用**：`products.product_image_url_big` 立创原始链接（爬虫已获取，无需额外操作）
@@ -1291,24 +1354,32 @@ if ((imageLink == null || imageLink.isEmpty()) && product.getProductImageUrlBig(
 
 ### 📝 P2开发经验总结
 
-#### 1. Excel导出设计
-- **动态列生成**：根据用户选择动态构建表头和数据列
-- **样式复用**：创建共享的CellStyle对象，避免超出Excel样式限制
-- **内存优化**：大数据量时考虑使用SXSSFWorkbook（流式写入）
-- **折扣计算**：在导出时应用折扣，保留4位小数精度
+#### 1. 淘宝CSV格式处理
+- **固定格式**：80列固定格式，头部3行（版本信息+英文列名+中文列名）
+- **CSV转义**：包含逗号、双引号或换行的字段需要用双引号包裹，内部双引号转义为两个双引号
+- **字符编码**：使用UTF-8编码，确保中文正常显示
+- **阶梯价格转换**：数据库N级 → 导出N+2级（额外2级使用第1阶价格）
 
-#### 2. Blob文件下载
+#### 2. 批量添加模式设计
+- **任务列表**：前端维护任务列表，支持多次筛选添加
+- **去重逻辑**：使用LinkedHashMap按productCode去重，后添加的覆盖先添加的
+- **状态管理**：任务列表保存在前端状态，刷新页面会丢失（可考虑localStorage持久化）
+- **用户体验**：添加成功后提示新增数量，导出前显示总产品数
+
+#### 3. 级联下拉框实现
+- **数据加载**：页面加载时一次性获取所有三级分类数据
+- **前端过滤**：根据父级ID在前端过滤子级选项，避免重复请求后端
+- **状态联动**：父级变化时清空子级选中值和选项列表
+- **禁用控制**：未选择父级时禁用子级下拉框，引导用户正确操作
+
+#### 4. Blob文件下载（CSV）
 - **responseType**: 请求时设置 `responseType: 'blob'`
-- **文件命名**：前端生成时间戳文件名，与后端保持一致
+- **MIME类型**：CSV文件使用 `text/csv;charset=utf-8`
+- **文件命名**：淘宝导入_yyyyMMdd_HHmmss.csv
 - **内存释放**：下载完成后调用 `URL.revokeObjectURL()` 释放内存
 
-#### 3. 树形选择器
-- **SHOW_PARENT策略**：选中子节点时只显示父节点，简化用户体验
-- **selectable属性**：一级分类设为不可选，只允许选择二级/三级分类
-- **值过滤**：buildRequest时过滤掉非数字的key（如`l1_xxx`）
-
-#### 4. 图片链接Fallback策略
-- **多数据源设计**：区分"自定义链接"和"原始链接"
+#### 5. 图片链接Fallback策略
+- **多数据源设计**：区分"自定义链接"（image_links表）和"原始链接"（products表）
 - **优先级fallback**：优先使用平台专属链接，没有则使用爬虫获取的原始链接
 - **用户体验**：即使未导入自定义链接，也能看到立创原始图片
 - **渐进增强**：用户可以逐步完善自定义链接，不影响现有功能
@@ -1319,14 +1390,14 @@ if ((imageLink == null || imageLink.isEmpty()) && product.getProductImageUrlBig(
 
 | 序号 | 功能 | 状态 | 备注 |
 |-----|------|------|------|
-| P2-1 | 高级导出独立页面 | ✅ 已完成 | 独立配置页+路由+菜单 |
-| P2-1a | 多维度筛选 | ✅ 已完成 | 店铺/分类/品牌/关键词 |
-| P2-1b | 折扣设置 | ✅ 已完成 | 百分比输入，支持1-100% |
-| P2-1c | 聚合数据导出 | ✅ 已完成 | 运费模板+图片链接+阶梯价 |
-| P2-1d | 预览功能 | ✅ 已完成 | 导出前统计产品/店铺/分类/品牌数量 |
-| P2-1e | 图片链接Fallback | ✅ 已完成 | 优先自定义链接，备用立创原始链接 |
+| P2-1 | 高级导出独立模块（淘宝CSV） | ✅ 已完成 | 批量添加模式+80列CSV格式 |
+| P2-1a | 批量添加工作流 | ✅ 已完成 | 筛选→添加→重复→导出 |
+| P2-1b | 级联分类选择 | ✅ 已完成 | 一级→二级→三级级联下拉 |
+| P2-1c | 6级折扣配置 | ✅ 已完成 | 独立输入框，默认90,88,85,82,80,78 |
+| P2-1d | 淘宝CSV生成 | ✅ 已完成 | 80列固定格式，阶梯价N→N+2转换 |
+| P2-1e | 图片链接Fallback | ✅ 已完成 | 优先自定义，备用立创原图 |
 
 ---
 
 *最后更新时间: 2025-11-21*
-*文档版本: v1.3*
+*文档版本: v1.4*

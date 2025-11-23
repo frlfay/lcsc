@@ -136,3 +136,19 @@ export const deleteCategoryLevel3 = (id: number): Promise<void> => {
 export const deleteCategoryLevel3Batch = (ids: number[]): Promise<void> => {
   return api.delete('/categories/level3/batch', { data: ids })
 }
+
+// ========== 聚合 API ==========
+
+// 获取所有分类（一级、二级、三级）
+export const getAllCategories = async (): Promise<{
+  level1: CategoryLevel1Code[]
+  level2: CategoryLevel2Code[]
+  level3: CategoryLevel3Code[]
+}> => {
+  const [level1, level2, level3] = await Promise.all([
+    getCategoryLevel1List(),
+    getCategoryLevel2List(),
+    getCategoryLevel3List()
+  ])
+  return { level1, level2, level3 }
+}

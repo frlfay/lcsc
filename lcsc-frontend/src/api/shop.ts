@@ -50,3 +50,6 @@ export const deleteShop = (id: number): Promise<void> => {
 export const deleteShopBatch = (ids: number[]): Promise<void> => {
   return api.delete('/shops/batch', { data: ids })
 }
+
+// 获取所有店铺列表（别名）
+export const getAllShops = getShopList
