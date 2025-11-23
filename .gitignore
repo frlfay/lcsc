@@ -120,14 +120,9 @@ docker-compose.override.yml
 .dockerignore
 
 # ==================== 数据库 ====================
-*.db
-*.sqlite
-*.sqlite3
 *.log
 *.sql.bak
 data/
-database/
-db/
 
 # ==================== 环境配置 ====================
 .env
