@@ -641,6 +641,47 @@ public class CrawlerControllerV3 {
     }
 
     /**
+     * 清理Redis队列（用于重置爬虫状态）
+     * 慎用：会清除所有待处理和处理中的任务
+     */
+    @PostMapping("/clear-redis-queue")
+    public Result<Map<String, Object>> clearRedisQueue() {
+        try {
+            log.warn("========== 手动清理Redis队列 ==========");
+
+            // 1. 获取清理前的状态
+            Long pendingBefore = redisTemplate.opsForZSet().size("crawler:queue:pending");
+            Long processingBefore = redisTemplate.opsForSet().size("crawler:queue:processing");
+            Long dedupBefore = redisTemplate.opsForSet().size("crawler:dedup:category");
+
+            // 2. 清空所有队列
+            queueService.clearAllQueues();
+
+            // 3. 重新初始化状态
+            queueService.initializeState();
+
+            // 4. 返回清理结果
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", "Redis队列已清理");
+            result.put("cleared", Map.of(
+                "pending", pendingBefore != null ? pendingBefore : 0,
+                "processing", processingBefore != null ? processingBefore : 0,
+                "dedup", dedupBefore != null ? dedupBefore : 0
+            ));
+
+            log.info("Redis队列清理完成: pending={}, processing={}, dedup={}",
+                pendingBefore, processingBefore, dedupBefore);
+
+            return Result.success(result);
+
+        } catch (Exception e) {
+            log.error("清理Redis队列失败", e);
+            return Result.error("清理失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 健康检查
      */
     @GetMapping("/health")

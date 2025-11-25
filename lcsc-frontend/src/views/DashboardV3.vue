@@ -183,7 +183,7 @@
               :value-style="{ color: '#1890ff' }"
             />
             <div v-if="queueStatus.subTaskCount > 0" class="text-xs text-orange-500 mt-1">
-              含 {{ queueStatus.subTaskCount }} 个品牌子任务
+              含 {{ queueStatus.subTaskCount }} 个拆分子任务
             </div>
           </a-card>
         </a-col>
@@ -228,7 +228,7 @@
         <template #format="percent">
           {{ percent }}% ({{ queueStatus.completed }} / {{ queueStatus.total }})
           <span v-if="queueStatus.subTaskCount > 0" class="text-orange-500 ml-2">
-            (含 {{ queueStatus.subTaskCount }} 个品牌子任务)
+            (含 {{ queueStatus.subTaskCount }} 个拆分子任务)
           </span>
         </template>
       </a-progress>
@@ -247,10 +247,13 @@
         <template #description>
           <div v-for="(task, index) in splitTasks.slice(0, 3)" :key="index" class="mb-2">
             <div><strong>{{ task.catalogName }}</strong> ({{ task.totalProducts }} 个产品)</div>
-            <div class="text-secondary">已拆分为 {{ task.splitCount }} 个品牌子任务</div>
-            <div v-if="task.brands && task.brands.length > 0" class="text-secondary small">
-              包含品牌: {{ task.brands.map((b: any) => b.brandName).join(', ') }}
-              <span v-if="task.splitCount > task.brands.length">等{{ task.splitCount }}个</span>
+            <div class="text-secondary">
+              已拆分为 {{ task.splitCount }} 个子任务
+              <span v-if="task.splitDimension">({{ task.splitDimension }})</span>
+            </div>
+            <div v-if="task.splitUnits && task.splitUnits.length > 0" class="text-secondary small">
+              包含: {{ task.splitUnits.map((u: any) => u.filterValue).join(', ') }}
+              <span v-if="task.splitCount > task.splitUnits.length">等{{ task.splitCount }}个</span>
             </div>
           </div>
           <div v-if="splitTasks.length > 3" class="text-secondary">
@@ -434,10 +437,10 @@
                   color: record.totalProducts > 4800 ? '#fa8c16' : undefined
                 }"
               />
-              <a-tag v-if="record.totalProducts > 4800" color="warning" style="font-size: 11px">
+              <!-- <a-tag v-if="record.totalProducts > 4800" color="warning" style="font-size: 11px">
                 <template #icon>🔀</template>
                 将拆分
-              </a-tag>
+              </a-tag> -->
             </a-space>
           </template>
         </a-table-column>
@@ -504,7 +507,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { useRouter } from 'vue-router'
 import {
@@ -628,7 +631,14 @@ const storageInfo = ref({
 const resultPagination = reactive({
   current: 1,
   pageSize: 20,
-  total: 0
+  total: 0,
+  showSizeChanger: true,
+  showQuickJumper: true,
+  showTotal: (total: number) => `共 ${total} 条数据`,
+  onChange: (page: number, pageSize: number) => {
+    resultPagination.current = page
+    resultPagination.pageSize = pageSize
+  }
 })
 
 // 计算属性
@@ -638,10 +648,26 @@ const overallProgress = computed(() => {
 })
 
 const filteredCategoriesWithStatus = computed(() => {
-  if (!resultSearchKeyword.value) return categoriesWithStatus.value
-  return categoriesWithStatus.value.filter(cat =>
-    cat.categoryLevel2Name.includes(resultSearchKeyword.value)
-  )
+  // 1. 筛选
+  let filtered = categoriesWithStatus.value
+  if (resultSearchKeyword.value) {
+    filtered = filtered.filter(cat =>
+      cat.categoryLevel2Name.includes(resultSearchKeyword.value)
+    )
+  }
+
+  // 2. 更新总数
+  resultPagination.total = filtered.length
+
+  // 3. 分页切片
+  const start = (resultPagination.current - 1) * resultPagination.pageSize
+  const end = start + resultPagination.pageSize
+  return filtered.slice(start, end)
+})
+
+// 监听搜索关键词变化，重置到第一页
+watch(resultSearchKeyword, () => {
+  resultPagination.current = 1
 })
 
 // 方法
@@ -765,7 +791,8 @@ const loadCategoriesWithStatus = async () => {
     const data = await getCategoriesWithStatus()
     if (data) {
       categoriesWithStatus.value = data
-      resultPagination.total = data.length
+      // total 在 computed 中动态计算，此处重置页码
+      resultPagination.current = 1
     }
   } catch (error) {
     console.error('加载分类状态失败:', error)

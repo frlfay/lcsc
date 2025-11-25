@@ -290,15 +290,16 @@ public class CrawlerTaskQueueService {
                 return;
             }
 
-            String catalogIdStr = (String) taskMap.get("catalogId");
+            String catalogIdStr = (String) taskMap.get("categoryId");
             Integer catalogId = Integer.valueOf(catalogIdStr);
+            String categoryLevel = (String) taskMap.get("categoryLevel");
 
             // 2. 移出处理中队列
             redisTemplate.opsForSet().remove(QUEUE_PROCESSING, taskId);
 
             // 3. 移除去重标记
             redisTemplate.opsForSet().remove(DEDUP_SET, catalogIdStr);
-            
+
             // 3b. 从映射中移除（双保险）
             redisTemplate.opsForHash().delete(CATALOG_TO_TASK_MAP, catalogIdStr);
 
@@ -318,18 +319,36 @@ public class CrawlerTaskQueueService {
                 redisTemplate.opsForHash().increment(STATE_KEY, "failedTasks", 1);
             }
 
-            // 6. 更新数据库中的分类状态
-            CategoryLevel2Code category = level2Mapper.selectById(catalogId);
-            if (category != null) {
-                category.setCrawlStatus(success ? "COMPLETED" : "FAILED");
-                category.setLastCrawlTime(LocalDateTime.now());
-                if (!success && errorMessage != null) {
-                    category.setErrorMessage(errorMessage);
+            // 6. 更新数据库中的分类状态（支持二级和三级分类）
+            if ("level3".equals(categoryLevel)) {
+                // 三级分类
+                CategoryLevel3Code level3 = level3Service.getOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CategoryLevel3Code>()
+                        .eq(CategoryLevel3Code::getId, catalogId)
+                );
+                if (level3 != null) {
+                    level3.setCrawlStatus(success ? "COMPLETED" : "FAILED");
+                    level3.setLastCrawlTime(LocalDateTime.now());
+                    if (!success && errorMessage != null) {
+                        level3.setErrorMessage(errorMessage);
+                    }
+                    level3Service.updateById(level3);
                 }
-                level2Mapper.updateById(category);
+            } else {
+                // 二级分类
+                CategoryLevel2Code category = level2Mapper.selectById(catalogId);
+                if (category != null) {
+                    category.setCrawlStatus(success ? "COMPLETED" : "FAILED");
+                    category.setLastCrawlTime(LocalDateTime.now());
+                    if (!success && errorMessage != null) {
+                        category.setErrorMessage(errorMessage);
+                    }
+                    level2Mapper.updateById(category);
+                }
             }
 
-            log.info("任务完成: taskId={}, catalogId={}, success={}", taskId, catalogId, success);
+            log.info("任务完成: taskId={}, catalogId={}, level={}, success={}",
+                taskId, catalogId, categoryLevel, success);
 
         } catch (Exception e) {
             log.error("完成任务时出错: taskId={}", taskId, e);
@@ -631,6 +650,119 @@ public class CrawlerTaskQueueService {
         } catch (Exception e) {
             log.error("创建品牌筛选子任务失败: parentTaskId={}, brandId={}", parentTaskId, brandId, e);
             throw new RuntimeException("创建品牌筛选子任务失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 创建通用拆分子任务（支持多级拆分：品牌→封装→参数）
+     *
+     * @param parentTaskId 父任务ID
+     * @param categoryId 分类ID
+     * @param categoryLevel 分类级别（level2 或 level3）
+     * @param catalogApiId 立创API的catalogId
+     * @param catalogName 分类名称
+     * @param dimensionName 拆分维度名称（Brand, Package, Voltage等）
+     * @param filterId 筛选值ID
+     * @param filterValue 筛选值名称（用于显示）
+     * @param expectedCount 预期产品数量
+     * @param filterParams 累积的筛选参数（Map格式，包含所有层级的筛选条件）
+     * @param splitLevel 拆分深度（0=第一次拆分，1=第二次拆分，以此类推）
+     * @param level1Id 一级分类ID
+     * @param level1Name 一级分类名称
+     * @param level2Id 二级分类ID（可选）
+     * @param priority 优先级
+     * @return 任务ID
+     */
+    public String createSplitTask(
+            String parentTaskId,
+            Integer categoryId,
+            String categoryLevel,
+            String catalogApiId,
+            String catalogName,
+            String dimensionName,
+            String filterId,
+            String filterValue,
+            int expectedCount,
+            Map<String, Object> filterParams,
+            int splitLevel,
+            Integer level1Id,
+            String level1Name,
+            Integer level2Id,
+            int priority) {
+        try {
+            // 1. 生成子任务ID（包含维度信息）
+            String sanitizedFilterId = filterId.replaceAll("[^a-zA-Z0-9]", "_");
+            if (sanitizedFilterId.length() > 20) {
+                sanitizedFilterId = sanitizedFilterId.substring(0, 20);
+            }
+            String taskId = String.format("TASK_%d_%s_%s_%d",
+                    categoryId, dimensionName, sanitizedFilterId, System.currentTimeMillis());
+
+            // 2. 序列化筛选参数为JSON
+            String filterParamsJson;
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                filterParamsJson = objectMapper.writeValueAsString(filterParams);
+            } catch (Exception e) {
+                log.error("序列化筛选参数失败: {}", e.getMessage());
+                filterParamsJson = "{}";
+            }
+
+            // 3. 构建任务详情
+            Map<String, String> taskDetail = new HashMap<>();
+            taskDetail.put("categoryId", String.valueOf(categoryId));
+            taskDetail.put("categoryLevel", categoryLevel);
+            taskDetail.put("catalogApiId", catalogApiId);
+            taskDetail.put("catalogName", catalogName);
+            taskDetail.put("level1Id", String.valueOf(level1Id));
+            taskDetail.put("level1Name", level1Name);
+            if (level2Id != null) {
+                taskDetail.put("level2Id", String.valueOf(level2Id));
+            }
+            taskDetail.put("priority", String.valueOf(priority));
+            taskDetail.put("status", "PENDING");
+            taskDetail.put("createdAt", LocalDateTime.now().toString());
+
+            // 4. 添加拆分相关字段
+            taskDetail.put("isSubTask", "true");
+            taskDetail.put("parentTaskId", parentTaskId);
+            taskDetail.put("splitLevel", String.valueOf(splitLevel));
+            taskDetail.put("dimensionName", dimensionName);
+            taskDetail.put("filterId", filterId);
+            taskDetail.put("filterValue", filterValue);
+            taskDetail.put("filterParams", filterParamsJson);
+            taskDetail.put("expectedCount", String.valueOf(expectedCount));
+
+            // 5. 兼容旧逻辑：如果是品牌维度，也设置brandId/brandName
+            if ("Brand".equals(dimensionName)) {
+                taskDetail.put("brandId", filterId);
+                taskDetail.put("brandName", filterValue);
+                taskDetail.put("splitStrategy", "BRAND");
+            } else if ("Package".equals(dimensionName)) {
+                taskDetail.put("splitStrategy", "PACKAGE");
+            } else {
+                taskDetail.put("splitStrategy", "PARAMETER");
+            }
+
+            // 6. 保存任务到Redis
+            redisTemplate.opsForHash().putAll(TASK_PREFIX + taskId, taskDetail);
+
+            // 7. 加入优先级队列
+            double score = priority * 1_000_000_000_000_000L + System.currentTimeMillis();
+            redisTemplate.opsForZSet().add(QUEUE_PENDING, taskId, score);
+
+            // 8. 更新全局统计
+            redisTemplate.opsForHash().increment(STATE_KEY, "totalTasks", 1);
+
+            log.info("创建拆分子任务成功: taskId={}, splitLevel={}, dimension={}, value={}, expectedCount={}",
+                    taskId, splitLevel, dimensionName, filterValue, expectedCount);
+
+            return taskId;
+
+        } catch (Exception e) {
+            log.error("创建拆分子任务失败: parentTaskId={}, dimension={}, filterId={}",
+                    parentTaskId, dimensionName, filterId, e);
+            throw new RuntimeException("创建拆分子任务失败: " + e.getMessage());
         }
     }
 

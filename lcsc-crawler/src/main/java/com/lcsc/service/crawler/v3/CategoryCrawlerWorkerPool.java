@@ -98,6 +98,12 @@ public class CategoryCrawlerWorkerPool {
     @Value("${crawler.enable-pdf-download:false}")
     private boolean enablePdfDownload;
 
+    /**
+     * 最大拆分深度（0=不拆分，1=只拆分一次，2=最多二级拆分，3=最多三级拆分）
+     */
+    @Value("${crawler.split.max-depth:3}")
+    private int maxSplitDepth;
+
     private ExecutorService executorService;
     private volatile boolean isRunning = false;
     private int workerThreadCount = 3; // 默认3个线程，可配置
@@ -160,32 +166,58 @@ public class CategoryCrawlerWorkerPool {
             Thread.currentThread().interrupt();
         }
 
-        // 清理Redis中残留的"处理中"任务（这些任务被Worker中断，实际已停止）
-        cleanupOrphanedTasks();
+        // 清理Redis中残留的任务（包括待处理和处理中的任务）
+        cleanupAllRemainingTasks();
     }
 
     /**
-     * 清理孤儿任务（停止时残留在Redis中的"处理中"任务）
+     * 清理所有残留任务（停止时清理待处理和处理中的任务）
+     * 修复问题：之前只清理processing队列，导致pending队列残留，下次启动会继续处理旧任务
      */
-    private void cleanupOrphanedTasks() {
+    private void cleanupAllRemainingTasks() {
         try {
+            // 1. 清理待处理队列（pending）- 这是主要问题
+            Set<Object> pendingTasks = redisTemplate.opsForZSet().range("crawler:queue:pending", 0, -1);
+            int pendingCount = pendingTasks != null ? pendingTasks.size() : 0;
+
+            // 2. 清理处理中队列（processing）
             Set<Object> processingTasks = redisTemplate.opsForSet().members("crawler:queue:processing");
-            if (processingTasks == null || processingTasks.isEmpty()) {
+            int processingCount = processingTasks != null ? processingTasks.size() : 0;
+
+            int totalCount = pendingCount + processingCount;
+
+            if (totalCount == 0) {
                 log.info("无残留任务需要清理");
                 return;
             }
 
-            log.warn("发现 {} 个残留任务，开始清理", processingTasks.size());
+            log.warn("========== 发现 {} 个残留任务，开始清理 ==========", totalCount);
+            log.warn("待处理队列: {} 个任务", pendingCount);
+            log.warn("处理中队列: {} 个任务", processingCount);
 
-            for (Object taskIdObj : processingTasks) {
-                String taskId = (String) taskIdObj;
-                log.info("清理残留任务: {}", taskId);
+            // 清理待处理队列中的任务
+            if (pendingTasks != null && !pendingTasks.isEmpty()) {
+                for (Object taskIdObj : pendingTasks) {
+                    String taskId = (String) taskIdObj;
+                    log.info("清理待处理任务: {}", taskId);
 
-                // 标记任务为停止状态
-                queueService.completeTask(taskId, false, "爬虫已停止");
+                    // 标记任务为停止状态（会同时更新数据库中的分类状态）
+                    queueService.completeTask(taskId, false, "爬虫已停止，任务取消");
+                }
             }
 
-            log.info("残留任务清理完成");
+            // 清理处理中队列的任务
+            if (processingTasks != null && !processingTasks.isEmpty()) {
+                for (Object taskIdObj : processingTasks) {
+                    String taskId = (String) taskIdObj;
+                    log.info("清理处理中任务: {}", taskId);
+
+                    // 标记任务为停止状态
+                    queueService.completeTask(taskId, false, "爬虫已停止，任务中断");
+                }
+            }
+
+            log.info("========== 残留任务清理完成 ==========");
 
         } catch (Exception e) {
             log.error("清理残留任务失败", e);
@@ -374,22 +406,44 @@ public class CategoryCrawlerWorkerPool {
             String isSubTask = (String) taskMap.get("isSubTask");
             boolean isSubTaskFlag = "true".equals(isSubTask);
 
+            // 获取当前拆分深度（0=父任务，1=一级子任务，2=二级子任务...）
+            String splitLevelStr = (String) taskMap.get("splitLevel");
+            int currentSplitLevel = 0;
+            if (splitLevelStr != null) {
+                try {
+                    currentSplitLevel = Integer.parseInt(splitLevelStr);
+                } catch (NumberFormatException e) {
+                    currentSplitLevel = isSubTaskFlag ? 1 : 0;  // 兼容旧任务
+                }
+            } else if (isSubTaskFlag) {
+                currentSplitLevel = 1;  // 兼容旧任务
+            }
+
+            // 诊断日志：记录任务类型和拆分深度
+            log.info("Worker-{} 任务信息: taskId={}, isSubTask={}, splitLevelStr={}, currentSplitLevel={}, maxSplitDepth={}",
+                    workerId, taskId, isSubTaskFlag, splitLevelStr, currentSplitLevel, maxSplitDepth);
+
+            // 获取累积的筛选参数（用于多级拆分）
+            String existingFilterParamsJson = (String) taskMap.get("filterParams");
+            Map<String, Object> accumulatedFilters = new HashMap<>();
+
             if (isSubTaskFlag) {
-                log.info("Worker-{} 当前是子任务，品牌={}, 预期产品数={}",
+                log.info("Worker-{} 当前是子任务，拆分深度={}, 品牌={}, 预期产品数={}",
                         workerId,
+                        currentSplitLevel,
                         taskMap.get("brandName"),
                         taskMap.get("expectedCount"));
 
-                // 子任务需要添加品牌筛选参数
-                String filterParamsJson = (String) taskMap.get("filterParams");
-                if (filterParamsJson != null && !filterParamsJson.isEmpty()) {
+                // 子任务需要添加筛选参数
+                if (existingFilterParamsJson != null && !existingFilterParamsJson.isEmpty()) {
                     try {
                         // 解析filterParams并添加到API请求参数中
                         @SuppressWarnings("unchecked")
                         Map<String, Object> additionalFilters = objectMapper.readValue(
-                                filterParamsJson, HashMap.class);
+                                existingFilterParamsJson, HashMap.class);
                         filterParams.putAll(additionalFilters);
-                        log.info("Worker-{} 子任务已添加品牌筛选参数: {}", workerId, additionalFilters);
+                        accumulatedFilters.putAll(additionalFilters);
+                        log.info("Worker-{} 子任务已添加筛选参数: {}", workerId, additionalFilters);
                     } catch (Exception e) {
                         log.error("Worker-{} 解析filterParams失败: {}", workerId, e.getMessage());
                     }
@@ -400,6 +454,8 @@ public class CategoryCrawlerWorkerPool {
             int totalPages = (int) firstPage.get("totalPages");
             int totalProducts = (int) firstPage.get("totalRows");
 
+            log.warn("======= [诊断] Worker-{} 获取到第一页数据: totalPages={}, totalProducts={}, isSubTask={}, currentSplitLevel={}, maxSplitDepth={} =======",
+                workerId, totalPages, totalProducts, isSubTaskFlag, currentSplitLevel, maxSplitDepth);
             log.info("Worker-{} 分类 {} ({}) 总页数: {}, 总产品数: {}",
                 workerId, catalogName, categoryLevel, totalPages, totalProducts);
 
@@ -416,32 +472,50 @@ public class CategoryCrawlerWorkerPool {
             }
 
             // ====== 拆分检测逻辑：突破5000条限制 ======
-            // 检查是否需要拆分（子任务不再拆分）
-            if (!isSubTaskFlag && taskSplitService.needSplit(totalProducts)) {
-                log.warn("Worker-{} 分类 {} 产品总数 {} 超过限制，启动品牌拆分策略",
-                        workerId, catalogName, totalProducts);
+            log.warn("======= [诊断] Worker-{} 准备调用needSplit: totalProducts={} =======", workerId, totalProducts);
+            boolean needSplit = taskSplitService.needSplit(totalProducts);
+            log.warn("======= [诊断] Worker-{} needSplit返回: {}, currentSplitLevel={}, maxSplitDepth={}, 条件判断={} =======",
+                    workerId, needSplit, currentSplitLevel, maxSplitDepth, (currentSplitLevel < maxSplitDepth && needSplit));
+            log.info("Worker-{} 拆分检测: totalProducts={}, currentSplitLevel={}, maxSplitDepth={}, needSplit={}, 条件结果={}",
+                    workerId, totalProducts, currentSplitLevel, maxSplitDepth, needSplit,
+                    (currentSplitLevel < maxSplitDepth && needSplit));
+
+            // 检查是否需要拆分（支持多级拆分，只要未达到最大深度）
+            if (currentSplitLevel < maxSplitDepth && needSplit) {
+                String splitDimension = getSplitDimension(currentSplitLevel);
+                log.warn("Worker-{} 分类 {} 产品总数 {} 超过限制，启动{}拆分策略（当前深度={}/{}）",
+                        workerId, catalogName, totalProducts, splitDimension, currentSplitLevel, maxSplitDepth);
 
                 try {
-                    // 3. 获取品牌列表
-                    com.lcsc.dto.BrandSplitUnit[] brandUnits = taskSplitService.splitByBrand(
-                            catalogApiId, catalogName).toArray(new com.lcsc.dto.BrandSplitUnit[0]);
+                    // 获取拆分单元列表（根据当前深度选择不同维度）
+                    List<com.lcsc.dto.SplitUnit> splitUnits = taskSplitService.smartSplit(
+                            catalogApiId, catalogName, currentSplitLevel, accumulatedFilters);
 
-                    if (brandUnits.length == 0) {
-                        log.error("Worker-{} 品牌拆分失败：未找到任何品牌，继续正常爬取", workerId);
+                    if (splitUnits.isEmpty()) {
+                        log.error("Worker-{} {}拆分失败：未找到可用的拆分维度，继续正常爬取", workerId, splitDimension);
                     } else {
-                        // 4. 为每个品牌创建子任务
+                        // 为每个拆分单元创建子任务
                         int createdCount = 0;
-                        for (com.lcsc.dto.BrandSplitUnit brandUnit : brandUnits) {
+                        int nextSplitLevel = currentSplitLevel + 1;
+
+                        for (com.lcsc.dto.SplitUnit splitUnit : splitUnits) {
                             try {
-                                queueService.createBrandFilteredTask(
+                                // 合并累积的筛选参数
+                                Map<String, Object> newFilterParams = new HashMap<>(accumulatedFilters);
+                                newFilterParams.putAll(splitUnit.getFilterParams());
+
+                                queueService.createSplitTask(
                                         taskId,                                // parentTaskId
                                         categoryId,                            // categoryId
                                         categoryLevel,                         // categoryLevel
                                         catalogApiId,                          // catalogApiId
                                         catalogName,                           // catalogName
-                                        brandUnit.getBrandId(),                // brandId
-                                        brandUnit.getBrandName(),              // brandName
-                                        brandUnit.getProductCount(),           // expectedCount
+                                        splitUnit.getDimensionName(),          // 拆分维度名称
+                                        splitUnit.getFilterId(),               // 筛选值ID
+                                        splitUnit.getFilterValue(),            // 筛选值名称
+                                        splitUnit.getProductCount(),           // expectedCount
+                                        newFilterParams,                       // 累积的筛选参数
+                                        nextSplitLevel,                        // 拆分深度
                                         categoryLevel1Id,                      // level1Id
                                         level1Name,                            // level1Name
                                         categoryLevel2Id,                      // level2Id (可能为null)
@@ -449,43 +523,47 @@ public class CategoryCrawlerWorkerPool {
                                 );
                                 createdCount++;
                             } catch (Exception e) {
-                                log.error("Worker-{} 创建品牌子任务失败: brand={}, error={}",
-                                        workerId, brandUnit.getBrandName(), e.getMessage());
+                                log.error("Worker-{} 创建子任务失败: dimension={}, value={}, error={}",
+                                        workerId, splitUnit.getDimensionName(), splitUnit.getFilterValue(), e.getMessage());
                             }
                         }
 
-                        // 5. 标记父任务为"已拆分"状态
+                        // 标记父任务为"已拆分"状态
                         redisTemplate.opsForHash().put("crawler:task:" + taskId, "status", "SPLIT");
                         redisTemplate.opsForHash().put("crawler:task:" + taskId, "splitCount", String.valueOf(createdCount));
+                        redisTemplate.opsForHash().put("crawler:task:" + taskId, "splitDimension", splitDimension);
 
-                        log.info("Worker-{} 任务拆分完成: 父任务={}, 创建子任务={}个, 总预期产品数={}",
-                                workerId, taskId, createdCount, totalProducts);
+                        log.info("Worker-{} 任务拆分完成: 父任务={}, 维度={}, 创建子任务={}个, 总预期产品数={}",
+                                workerId, taskId, splitDimension, createdCount, totalProducts);
 
-                        // 6. 推送拆分事件到前端
+                        // 推送拆分事件到前端
                         broadcastWebSocket("TASK_SPLIT", Map.of(
                                 "taskId", taskId,
                                 "catalogName", catalogName,
                                 "totalProducts", totalProducts,
                                 "splitCount", createdCount,
-                                "brandUnits", java.util.Arrays.stream(brandUnits)
-                                        .limit(10) // 只显示前10个品牌
+                                "splitDimension", splitDimension,
+                                "splitLevel", currentSplitLevel,
+                                "splitUnits", splitUnits.stream()
+                                        .limit(10) // 只显示前10个
                                         .map(u -> Map.of(
-                                                "brandName", u.getBrandName(),
+                                                "dimensionName", u.getDimensionName(),
+                                                "filterValue", u.getFilterValue(),
                                                 "productCount", u.getProductCount()
                                         ))
                                         .toArray()
                         ));
 
-                        // 7. 完成父任务（状态为SPLIT）
+                        // 完成父任务（状态为SPLIT）
                         queueService.completeTask(taskId, true, null);
 
-                        // 8. 返回true，结束当前任务
+                        // 返回true，结束当前任务
                         log.info("Worker-{} 任务已拆分，结束父任务执行", workerId);
                         return true;
                     }
 
                 } catch (Exception e) {
-                    log.error("Worker-{} 品牌拆分过程失败: {}, 继续正常爬取", workerId, e.getMessage(), e);
+                    log.error("Worker-{} 拆分过程失败: {}, 继续正常爬取", workerId, e.getMessage(), e);
                     // 拆分失败则继续正常爬取
                 }
             }
@@ -1433,5 +1511,19 @@ public class CategoryCrawlerWorkerPool {
         } catch (Exception e) {
             log.error("Worker-{} 更新父二级分类状态失败: parentLevel2Id={}", workerId, parentLevel2Id, e);
         }
+    }
+
+    /**
+     * 根据拆分深度获取拆分维度名称
+     * @param splitLevel 拆分深度
+     * @return 维度名称（用于日志显示）
+     */
+    private String getSplitDimension(int splitLevel) {
+        return switch (splitLevel) {
+            case 0 -> "品牌(Brand)";
+            case 1 -> "封装(Package)";
+            case 2 -> "参数(Parameter)";
+            default -> "其他(Other)";
+        };
     }
 }

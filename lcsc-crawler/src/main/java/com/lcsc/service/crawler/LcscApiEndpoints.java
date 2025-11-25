@@ -133,7 +133,13 @@ public final class LcscApiEndpoints {
         public static final String PRODUCT_ARRANGE_LIST = "productArrangeList";
         public static final String CURRENT_PAGE = "currentPage";
         public static final String PAGE_SIZE = "pageSize";
-        
+
+        /**
+         * 价格区间筛选参数（实验性）
+         */
+        public static final String PRICE_FROM = "priceFrom";
+        public static final String PRICE_TO = "priceTo";
+
         /**
          * 默认筛选值
          */

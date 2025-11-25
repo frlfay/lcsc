@@ -278,9 +278,19 @@ public class LcscApiService {
             filterParams.getOrDefault(LcscApiEndpoints.FilterParams.PRODUCT_ARRANGE_LIST, new ArrayList<>()));
         
         // 设置复杂参数
-        requestBody.put(LcscApiEndpoints.FilterParams.PARAM_NAME_VALUE_MAP, 
+        requestBody.put(LcscApiEndpoints.FilterParams.PARAM_NAME_VALUE_MAP,
             filterParams.getOrDefault(LcscApiEndpoints.FilterParams.PARAM_NAME_VALUE_MAP, new HashMap<>()));
-        
+
+        // 价格区间参数（实验性）
+        if (filterParams.containsKey(LcscApiEndpoints.FilterParams.PRICE_FROM)) {
+            requestBody.put(LcscApiEndpoints.FilterParams.PRICE_FROM,
+                filterParams.get(LcscApiEndpoints.FilterParams.PRICE_FROM));
+        }
+        if (filterParams.containsKey(LcscApiEndpoints.FilterParams.PRICE_TO)) {
+            requestBody.put(LcscApiEndpoints.FilterParams.PRICE_TO,
+                filterParams.get(LcscApiEndpoints.FilterParams.PRICE_TO));
+        }
+
         // 复制其他参数
         for (Map.Entry<String, Object> entry : filterParams.entrySet()) {
             if (!requestBody.containsKey(entry.getKey())) {
