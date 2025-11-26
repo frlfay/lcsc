@@ -62,6 +62,17 @@ public class CrawlerTaskQueueService {
      * @return 任务ID
      */
     public String createCategoryTask(Integer categoryId, int priority) {
+        return createCategoryTask(categoryId, null, priority);
+    }
+
+    /**
+     * 创建单个分类爬取任务（支持明确指定分类级别）
+     * @param categoryId 分类ID
+     * @param forcedLevel 强制指定分类级别（"level2" 或 "level3"），传null则自动识别
+     * @param priority 优先级（10=手动, 1=自动）
+     * @return 任务ID
+     */
+    public String createCategoryTask(Integer categoryId, String forcedLevel, int priority) {
         try {
             // 1. 检查任务是否正在处理中
             if (isTaskProcessing(categoryId)) {
@@ -83,8 +94,8 @@ public class CrawlerTaskQueueService {
                 redisTemplate.opsForHash().increment(STATE_KEY, "totalTasks", -1);
             }
 
-            // 3. 智能识别分类级别（先查二级，再查三级）
-            CategoryLevel2Code level2 = level2Mapper.selectById(categoryId);
+            // 3. 识别分类级别（如果指定了forcedLevel，直接使用；否则智能识别）
+            CategoryLevel2Code level2 = null;
             CategoryLevel3Code level3 = null;
             String categoryLevel;
             String catalogName;
@@ -92,31 +103,63 @@ public class CrawlerTaskQueueService {
             Integer level1Id;
             Integer level2Id = null;
 
-            if (level2 != null) {
-                // 是二级分类
-                categoryLevel = "level2";
-                catalogName = level2.getCategoryLevel2Name();
-                catalogApiId = level2.getCatalogId();
-                level1Id = level2.getCategoryLevel1Id();
-                level2Id = level2.getId();
-                log.debug("识别为二级分类: id={}, name={}, catalogApiId={}", categoryId, catalogName, catalogApiId);
-            } else {
-                // 尝试查询三级分类
-                level3 = level3Service.getOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CategoryLevel3Code>()
-                    .eq(CategoryLevel3Code::getId, categoryId));
-
-                if (level3 == null) {
-                    throw new RuntimeException("分类不存在: " + categoryId);
+            if (forcedLevel != null) {
+                // 使用强制指定的分类级别，跳过智能识别
+                categoryLevel = forcedLevel;
+                if ("level2".equals(forcedLevel)) {
+                    level2 = level2Mapper.selectById(categoryId);
+                    if (level2 == null) {
+                        throw new RuntimeException("二级分类不存在: " + categoryId);
+                    }
+                    catalogName = level2.getCategoryLevel2Name();
+                    catalogApiId = level2.getCatalogId();
+                    level1Id = level2.getCategoryLevel1Id();
+                    level2Id = level2.getId();
+                    log.debug("强制指定为二级分类: id={}, name={}", categoryId, catalogName);
+                } else if ("level3".equals(forcedLevel)) {
+                    level3 = level3Service.getOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CategoryLevel3Code>()
+                        .eq(CategoryLevel3Code::getId, categoryId));
+                    if (level3 == null) {
+                        throw new RuntimeException("三级分类不存在: " + categoryId);
+                    }
+                    catalogName = level3.getCategoryLevel3Name();
+                    catalogApiId = level3.getCatalogId();
+                    level1Id = level3.getCategoryLevel1Id();
+                    level2Id = level3.getCategoryLevel2Id();
+                    log.debug("强制指定为三级分类: id={}, name={}, level2Id={}", categoryId, catalogName, level2Id);
+                } else {
+                    throw new RuntimeException("无效的分类级别: " + forcedLevel);
                 }
+            } else {
+                // 智能识别分类级别（先查二级，再查三级）
+                level2 = level2Mapper.selectById(categoryId);
 
-                // 是三级分类
-                categoryLevel = "level3";
-                catalogName = level3.getCategoryLevel3Name();
-                catalogApiId = level3.getCatalogId();
-                level1Id = level3.getCategoryLevel1Id();
-                level2Id = level3.getCategoryLevel2Id();
-                log.debug("识别为三级分类: id={}, name={}, catalogApiId={}, level2Id={}",
-                    categoryId, catalogName, catalogApiId, level2Id);
+                if (level2 != null) {
+                    // 是二级分类
+                    categoryLevel = "level2";
+                    catalogName = level2.getCategoryLevel2Name();
+                    catalogApiId = level2.getCatalogId();
+                    level1Id = level2.getCategoryLevel1Id();
+                    level2Id = level2.getId();
+                    log.debug("智能识别为二级分类: id={}, name={}, catalogApiId={}", categoryId, catalogName, catalogApiId);
+                } else {
+                    // 尝试查询三级分类
+                    level3 = level3Service.getOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CategoryLevel3Code>()
+                        .eq(CategoryLevel3Code::getId, categoryId));
+
+                    if (level3 == null) {
+                        throw new RuntimeException("分类不存在: " + categoryId);
+                    }
+
+                    // 是三级分类
+                    categoryLevel = "level3";
+                    catalogName = level3.getCategoryLevel3Name();
+                    catalogApiId = level3.getCatalogId();
+                    level1Id = level3.getCategoryLevel1Id();
+                    level2Id = level3.getCategoryLevel2Id();
+                    log.debug("智能识别为三级分类: id={}, name={}, catalogApiId={}, level2Id={}",
+                        categoryId, catalogName, catalogApiId, level2Id);
+                }
             }
 
             // 4. 查询一级分类信息
@@ -807,11 +850,13 @@ public class CrawlerTaskQueueService {
                 for (CategoryLevel3Code level3 : level3List) {
                     try {
                         if (!isDuplicated(level3.getId())) {
-                            String taskId = createCategoryTask(level3.getId(), priority);
+                            // ✅ 关键修复：明确指定这是三级分类，避免ID冲突导致的误识别
+                            String taskId = createCategoryTask(level3.getId(), "level3", priority);
                             taskIds.add(taskId);
                             level3TaskCount++;
-                            log.info("  → 创建三级分类任务: [{}] (catalogId={})",
+                            log.info("  → 创建三级分类任务: [{}] (ID:{}, catalogId={})",
                                 level3.getCategoryLevel3Name(),
+                                level3.getId(),
                                 level3.getCatalogId());
                         } else {
                             log.debug("  → 跳过已存在的三级分类任务: [{}]",
@@ -832,7 +877,8 @@ public class CrawlerTaskQueueService {
 
                 try {
                     if (!isDuplicated(level2Id)) {
-                        String taskId = createCategoryTask(level2Id, priority);
+                        // ✅ 明确指定为二级分类，保持代码一致性
+                        String taskId = createCategoryTask(level2Id, "level2", priority);
                         taskIds.add(taskId);
                         level2TaskCount++;
                     } else {

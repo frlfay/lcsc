@@ -311,6 +311,7 @@ public class CategoryCrawlerWorkerPool {
             CategoryLevel3Code level3Category = null;
             Integer categoryLevel1Id = null;
             Integer categoryLevel2Id = null;
+            String level2Name = null;  // 用于保存二级分类名称（三级分类任务需要）
 
             if ("level2".equals(categoryLevel)) {
                 // 二级分类
@@ -327,6 +328,7 @@ public class CategoryCrawlerWorkerPool {
 
                 categoryLevel1Id = level2Category.getCategoryLevel1Id();
                 categoryLevel2Id = level2Category.getId();
+                level2Name = catalogName;  // 二级分类任务，catalogName就是二级分类名称
 
             } else if ("level3".equals(categoryLevel)) {
                 // 三级分类
@@ -347,10 +349,13 @@ public class CategoryCrawlerWorkerPool {
                 // 同步更新父二级分类状态为PROCESSING（如果还不是）
                 if (categoryLevel2Id != null) {
                     CategoryLevel2Code parentLevel2 = categoryMapper.selectById(categoryLevel2Id);
-                    if (parentLevel2 != null && !"PROCESSING".equals(parentLevel2.getCrawlStatus())) {
-                        parentLevel2.setCrawlStatus("PROCESSING");
-                        categoryMapper.updateById(parentLevel2);
-                        log.info("Worker-{} 同步更新父二级分类状态: {} -> PROCESSING", workerId, parentLevel2.getCategoryLevel2Name());
+                    if (parentLevel2 != null) {
+                        level2Name = parentLevel2.getCategoryLevel2Name();  // 获取二级分类名称
+                        if (!"PROCESSING".equals(parentLevel2.getCrawlStatus())) {
+                            parentLevel2.setCrawlStatus("PROCESSING");
+                            categoryMapper.updateById(parentLevel2);
+                            log.info("Worker-{} 同步更新父二级分类状态: {} -> PROCESSING", workerId, level2Name);
+                        }
                     }
                 }
 
@@ -365,16 +370,9 @@ public class CategoryCrawlerWorkerPool {
                     redisTemplate.opsForHash().put("crawler:category:names:l1",
                         String.valueOf(categoryLevel1Id), level1Name);
                 }
-                if (categoryLevel2Id != null && "level2".equals(categoryLevel)) {
+                if (categoryLevel2Id != null && level2Name != null) {
                     redisTemplate.opsForHash().put("crawler:category:names:l2",
-                        String.valueOf(categoryLevel2Id), catalogName);
-                } else if (categoryLevel2Id != null && level2Category == null) {
-                    // 对于三级分类，也需要获取二级分类名称
-                    CategoryLevel2Code parentLevel2 = categoryMapper.selectById(categoryLevel2Id);
-                    if (parentLevel2 != null) {
-                        redisTemplate.opsForHash().put("crawler:category:names:l2",
-                            String.valueOf(categoryLevel2Id), parentLevel2.getCategoryLevel2Name());
-                    }
+                        String.valueOf(categoryLevel2Id), level2Name);
                 }
                 if ("level3".equals(categoryLevel)) {
                     redisTemplate.opsForHash().put("crawler:category:names:l3",
@@ -571,7 +569,7 @@ public class CategoryCrawlerWorkerPool {
             // 6. 处理第一页
             Integer categoryLevel3IdForProduct = "level3".equals(categoryLevel) ? categoryId : null;
             int savedCount = processAndSavePageData(categoryLevel1Id, categoryLevel2Id, categoryLevel3IdForProduct,
-                level1Name, catalogName, firstPage, workerId);
+                level1Name, level2Name, catalogName, firstPage, workerId);
 
             // 保存第一页的完整原始API响应
             String firstPageRawResponse = (String) firstPage.get("rawResponse");
@@ -640,7 +638,7 @@ public class CategoryCrawlerWorkerPool {
 
                 Map<String, Object> pageData = apiService.getQueryList(filterParams).join();
                 savedCount = processAndSavePageData(categoryLevel1Id, categoryLevel2Id, categoryLevel3IdForProduct,
-                    level1Name, catalogName, pageData, workerId);
+                    level1Name, level2Name, catalogName, pageData, workerId);
 
                 // 保存完整的原始API响应
                 String rawResponse = (String) pageData.get("rawResponse");
@@ -736,7 +734,7 @@ public class CategoryCrawlerWorkerPool {
      * 处理并保存页面数据（支持三级分类）
      */
     private int processAndSavePageData(Integer categoryLevel1Id, Integer categoryLevel2Id, Integer categoryLevel3Id,
-                                       String level1Name, String catalogName, Map<String, Object> pageData, int workerId) {
+                                       String level1Name, String level2Name, String catalogName, Map<String, Object> pageData, int workerId) {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> products = (List<Map<String, Object>>) pageData.get("dataList");
 
@@ -748,7 +746,7 @@ public class CategoryCrawlerWorkerPool {
         for (Map<String, Object> productData : products) {
             try {
                 Product product = convertToProduct(productData, categoryLevel1Id, categoryLevel2Id, categoryLevel3Id,
-                    level1Name, catalogName);
+                    level1Name, level2Name, catalogName);
                 boolean saved = productService.saveOrUpdateProduct(product);
                 if (saved) {
                     savedCount++;
@@ -802,24 +800,30 @@ public class CategoryCrawlerWorkerPool {
 
     /**
      * 转换产品数据（支持多图片下载和三级分类）
+     * @param level2Name 二级分类名称（对于三级分类任务，需要从数据库查询获取）
+     * @param catalogName 当前任务的分类名称（二级任务=二级名称，三级任务=三级名称）
      */
     private Product convertToProduct(Map<String, Object> productData, Integer categoryLevel1Id, Integer categoryLevel2Id, Integer categoryLevel3Id,
-                                     String level1Name, String catalogName) {
+                                     String level1Name, String level2Name, String catalogName) {
         Product product = new Product();
 
         product.setProductCode((String) productData.get("productCode"));
         product.setCategoryLevel1Id(categoryLevel1Id);
         product.setCategoryLevel2Id(categoryLevel2Id);
-        product.setCategoryLevel3Id(categoryLevel3Id);  // 新增：设置三级分类ID
+        product.setCategoryLevel3Id(categoryLevel3Id);
 
         // 同步填充分类名称（便于前端展示及导出）
         product.setCategoryLevel1Name(level1Name);
-        // 如果是三级分类任务，catalogName是三级分类名称
+
+        // 核心修复：根据是否是三级分类任务来区分
         if (categoryLevel3Id != null) {
-            // TODO: 可能需要同时保存二级分类名称
-            product.setCategoryLevel2Name(catalogName);
+            // 三级分类任务
+            product.setCategoryLevel2Name(level2Name);      // 使用查询到的二级分类名称
+            product.setCategoryLevel3Name(catalogName);     // catalogName是三级分类名称
         } else {
-            product.setCategoryLevel2Name(catalogName);
+            // 二级分类任务
+            product.setCategoryLevel2Name(catalogName);     // catalogName是二级分类名称
+            product.setCategoryLevel3Name(null);            // 无三级分类
         }
 
         String brandNameEn = (String) productData.get("brandNameEn");
