@@ -31,6 +31,11 @@ public class Shop {
     private String shippingTemplateId;
 
     /**
+     * 店铺分类码（用于淘宝导出）
+     */
+    private String sellerCategoryId;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createdAt;
@@ -64,6 +69,14 @@ public class Shop {
 
     public void setShippingTemplateId(String shippingTemplateId) {
         this.shippingTemplateId = shippingTemplateId;
+    }
+
+    public String getSellerCategoryId() {
+        return sellerCategoryId;
+    }
+
+    public void setSellerCategoryId(String sellerCategoryId) {
+        this.sellerCategoryId = sellerCategoryId;
     }
 
     public LocalDateTime getCreatedAt() {

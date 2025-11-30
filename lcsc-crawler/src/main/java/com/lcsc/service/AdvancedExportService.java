@@ -259,11 +259,17 @@ public class AdvancedExportService {
         // 1. cid: 固定值
         row.createCell(col++).setCellValue(FIXED_CID);
 
-        // 2. seller_cids: 店铺分类码
-        row.createCell(col++).setCellValue(shop.getId() + ";");
+        // 2. seller_cids: 店铺分类码（优先使用sellerCategoryId，fallback到shop.getId()）
+        String sellerCids = shop.getSellerCategoryId() != null && !shop.getSellerCategoryId().isEmpty()
+                ? shop.getSellerCategoryId()
+                : String.valueOf(shop.getId());
+        row.createCell(col++).setCellValue(sellerCids + ";");
 
-        // 3-6. stuff_status, location_state, location_city, item_type: 空
-        col += 4;
+        // 3. stuff_status: 新旧程度（默认值0）
+        row.createCell(col++).setCellValue(0);
+
+        // 4-6. location_state, location_city, item_type: 空
+        col += 3;
 
         // 7. price: 最高阶价格*折扣
         BigDecimal price = calculatePrice(product, task.getDiscounts());
@@ -277,38 +283,41 @@ public class AdvancedExportService {
         int num = (ladderCount + 2) * 1000000;
         row.createCell(col++).setCellValue(num);
 
-        // 10-14. valid_thru~express_fee: 空
-        col += 5;
+        // 10-11. valid_thru, freight_payer: 空
+        col += 2;
 
-        // 15. has_invoice: 0
+        // 12. post_fee: 0
         row.createCell(col++).setCellValue(0);
 
-        // 16. has_warranty: 0
+        // 13. ems_fee: 0
         row.createCell(col++).setCellValue(0);
 
-        // 17. approve_status: 空
+        // 14. express_fee: 空
         col++;
 
-        // 18. has_showcase: 1
+        // 15. has_invoice: 1
         row.createCell(col++).setCellValue(1);
 
-        // 19. list_time: 空
+        // 16. has_warranty: 空
         col++;
 
-        // 20. description: 0
+        // 17. approve_status: 0
         row.createCell(col++).setCellValue(0);
 
-        // 21. description: <p>参数名:参数值</p>格式
+        // 18-19. has_showcase, list_time: 空
+        col += 2;
+
+        // 20. description: <p>参数名:参数值</p>格式
         row.createCell(col++).setCellValue(buildDescription(product));
 
-        // 22. cateProps: 选项编号组合
+        // 21. cateProps: 选项编号组合
         row.createCell(col++).setCellValue(buildCateProps(ladderCount));
 
-        // 23. postage_id: 店铺运费模板ID
+        // 22. postage_id: 店铺运费模板ID
         row.createCell(col++).setCellValue(shop.getShippingTemplateId() != null ? shop.getShippingTemplateId() : "");
 
-        // 24-27. has_discount~auction_point: 空
-        col += 4;
+        // 23-27. has_discount~auction_point: 空
+        col += 5;
 
         // 28. picture: :1:0:|+图片链接
         row.createCell(col++).setCellValue(buildPicture(product, shop.getId(), imageLinkMap));
@@ -319,17 +328,54 @@ public class AdvancedExportService {
         // 30. skuProps: 价格:1000000::选项编号组合
         row.createCell(col++).setCellValue(buildSkuProps(product, task.getDiscounts(), ladderCount));
 
-        // 31-33. inputPids, inputValues, outer_id前的空
+        // 31-32. inputPids, inputValues: 空（2个字段）
         col += 2;
 
-        // 34. outer_id: 品牌（&替换为空格）
+        // 33. outer_id: 品牌（&替换为空格）
         String outerId = product.getBrand() != null ? product.getBrand().replace("&", " ") : "";
         row.createCell(col++).setCellValue(outerId);
 
-        // 35. propAlias: 选项编号:买X-Y个选这个组合
+        // 34. propAlias: 销售属性别名（空）
+        col++;
+
+        // 35-44. auto_fill~features: 空（10个字段）
+        col += 10;
+
+        // 45. buyareatype: 采购地（默认值0）
+        row.createCell(col++).setCellValue(0);
+
+        // 46-47. global_stock_type, global_stock_country: 空（2个字段）
+        col += 2;
+
+        // 48. sub_stock_type: 库存计数（默认值0）
+        row.createCell(col++).setCellValue(0);
+
+        // 49-58. item_size~cpv_memo: 空（10个字段）
+        col += 10;
+
+        // 59. input_custom_cpv: 自定义属性值（选项编号:买X-Y个选这个）
         row.createCell(col++).setCellValue(buildPropAlias(product, ladderCount));
 
-        // 36-79. 剩余字段全部为空（不需要创建）
+        // 60-62. qualification~o2o_bind_service: 空（3个字段）
+        col += 3;
+
+        // 63. departure_place: 发货地（默认值0）
+        row.createCell(col++).setCellValue(0);
+
+        // 64-66. car_cascade~exSkuProps: 空（3个字段）
+        col += 3;
+
+        // 67. deliveryTimeType: 发货时效（默认值0）
+        row.createCell(col++).setCellValue(0);
+
+        // 68-74. tbDeliveryTime~ysbCheckTask: 空（7个字段）
+        col += 7;
+
+        // 75. subStock: 拍下减库存（默认值1）
+        row.createCell(col++).setCellValue(1);
+
+        // 76-79. multiDiscountPromotion~shippingArea: 空（4个字段）
+        // 不需要创建空单元格
     }
 
     // ==================== 私有辅助方法 ====================
@@ -417,11 +463,17 @@ public class AdvancedExportService {
         // 1. cid: 固定值
         csv.append(FIXED_CID).append(",");
 
-        // 2. seller_cids: 店铺二级分类码（从shop获取，暂用店铺ID代替）
-        csv.append(shop.getId()).append(";,");
+        // 2. seller_cids: 店铺分类码（优先使用sellerCategoryId，fallback到shop.getId()）
+        String sellerCids = shop.getSellerCategoryId() != null && !shop.getSellerCategoryId().isEmpty()
+                ? shop.getSellerCategoryId()
+                : String.valueOf(shop.getId());
+        csv.append(sellerCids).append(";,");
 
-        // 3-6. stuff_status, location_state, location_city, item_type: 空
-        csv.append(",,,,");
+        // 3. stuff_status: 新旧程度（默认值0）
+        csv.append("0,");
+
+        // 4-6. location_state, location_city, item_type: 空
+        csv.append(",,,");
 
         // 7. price: 最高阶价格*折扣，向上取整2位小数
         BigDecimal price = calculatePrice(product, task.getDiscounts());
@@ -435,21 +487,31 @@ public class AdvancedExportService {
         int num = (ladderCount + 2) * 1000000;
         csv.append(num).append(",");
 
-        // 10-20. valid_thru~list_time: 空
-        csv.append(",,,,0,0,,1,,0,,");
+        // 10-19. valid_thru~list_time
+        // 10. valid_thru: 空
+        // 11. freight_payer: 空
+        // 12. post_fee: 0
+        // 13. ems_fee: 0
+        // 14. express_fee: 空
+        // 15. has_invoice: 1
+        // 16. has_warranty: 空
+        // 17. approve_status: 0
+        // 18. has_showcase: 空
+        // 19. list_time: 空
+        csv.append(",,0,0,,1,,0,,");
 
-        // 21. description: <p>参数名:参数值</p>格式
+        // 20. description: <p>参数名:参数值</p>格式
         String description = buildDescription(product);
         csv.append(escapeCsv(description)).append(",");
 
-        // 22. cateProps: 选项编号组合
+        // 21. cateProps: 选项编号组合
         String cateProps = buildCateProps(ladderCount);
         csv.append(cateProps).append(",");
 
-        // 23. postage_id: 店铺运费模板ID
+        // 22. postage_id: 店铺运费模板ID
         csv.append(shop.getShippingTemplateId() != null ? shop.getShippingTemplateId() : "").append(",");
 
-        // 24-27. has_discount~auction_point: 空
+        // 23-27. has_discount~auction_point: 空
         csv.append(",,,,,");
 
         // 28. picture: :1:0:|+图片链接
@@ -463,21 +525,55 @@ public class AdvancedExportService {
         String skuProps = buildSkuProps(product, task.getDiscounts(), ladderCount);
         csv.append(skuProps).append(",");
 
-        // 31-33. inputPids, inputValues: 空
-        csv.append(",,,");
+        // 31-32. inputPids, inputValues: 空（2个字段）
+        csv.append(",,");
 
-        // 34. outer_id: 品牌（&替换为空格）
+        // 33. outer_id: 品牌（&替换为空格）
         String outerId = product.getBrand() != null ? product.getBrand().replace("&", " ") : "";
         csv.append(escapeCsv(outerId)).append(",");
 
-        // 35. propAlias: 选项编号:买X-Y个选这个组合
-        String propAlias = buildPropAlias(product, ladderCount);
-        csv.append(escapeCsv(propAlias)).append(",");
+        // 34. propAlias: 销售属性别名（空）
+        csv.append(",");
 
-        // 36-79. 剩余字段全部为空
-        for (int i = 0; i < 44; i++) {
-            csv.append(",");
-        }
+        // 35-44. auto_fill~features: 空（10个字段）
+        csv.append(",,,,,,,,,,");
+
+        // 45. buyareatype: 采购地（默认值0）
+        csv.append("0,");
+
+        // 46-47. global_stock_type, global_stock_country: 空（2个字段）
+        csv.append(",,");
+
+        // 48. sub_stock_type: 库存计数（默认值0）
+        csv.append("0,");
+
+        // 49-58. item_size~cpv_memo: 空（10个字段）
+        csv.append(",,,,,,,,,,");
+
+        // 59. input_custom_cpv: 自定义属性值（选项编号:买X-Y个选这个）
+        String inputCustomCpv = buildPropAlias(product, ladderCount);
+        csv.append(escapeCsv(inputCustomCpv)).append(",");
+
+        // 60-62. qualification~o2o_bind_service: 空（3个字段）
+        csv.append(",,,");
+
+        // 63. departure_place: 发货地（默认值0）
+        csv.append("0,");
+
+        // 64-66. car_cascade~exSkuProps: 空（3个字段）
+        csv.append(",,,");
+
+        // 67. deliveryTimeType: 发货时效（默认值0）
+        csv.append("0,");
+
+        // 68-74. tbDeliveryTime~ysbCheckTask: 空（7个字段）
+        csv.append(",,,,,,,");
+
+        // 75. subStock: 拍下减库存（默认值1）
+        csv.append("1,");
+
+        // 76-79. multiDiscountPromotion~shippingArea: 空（4个字段）
+        csv.append(",,,,");
 
         csv.append("\n");
     }
@@ -485,16 +581,42 @@ public class AdvancedExportService {
     // ==================== CSV字段生成方法 ====================
 
     /**
-     * 构建title: 型号、封装 三级分类、二级分类、一级分类
+     * 构建title: 型号 封装 三级分类 二级分类 一级分类
+     * 示例: HG24C08CN DIP-8 EEPROM带电可擦写存储器芯片IC
      */
     private String buildTitle(Product product) {
-        return String.format("%s、%s %s、%s、%s",
-                product.getModel() != null ? product.getModel() : "",
-                product.getPackageName() != null ? product.getPackageName() : "",
-                product.getCategoryLevel3Name() != null ? product.getCategoryLevel3Name() : "",
-                product.getCategoryLevel2Name() != null ? product.getCategoryLevel2Name() : "",
-                product.getCategoryLevel1Name() != null ? product.getCategoryLevel1Name() : ""
-        );
+        StringBuilder title = new StringBuilder();
+
+        // 型号
+        if (product.getModel() != null && !product.getModel().isEmpty()) {
+            title.append(product.getModel());
+        }
+
+        // 封装（用空格分隔）
+        if (product.getPackageName() != null && !product.getPackageName().isEmpty()) {
+            if (title.length() > 0) title.append(" ");
+            title.append(product.getPackageName());
+        }
+
+        // 三级分类（用空格分隔）
+        if (product.getCategoryLevel3Name() != null && !product.getCategoryLevel3Name().isEmpty()) {
+            if (title.length() > 0) title.append(" ");
+            title.append(product.getCategoryLevel3Name());
+        }
+
+        // 二级分类（用空格分隔）
+        if (product.getCategoryLevel2Name() != null && !product.getCategoryLevel2Name().isEmpty()) {
+            if (title.length() > 0) title.append(" ");
+            title.append(product.getCategoryLevel2Name());
+        }
+
+        // 一级分类（用空格分隔）
+        if (product.getCategoryLevel1Name() != null && !product.getCategoryLevel1Name().isEmpty()) {
+            if (title.length() > 0) title.append(" ");
+            title.append(product.getCategoryLevel1Name());
+        }
+
+        return title.toString();
     }
 
     /**
@@ -525,14 +647,34 @@ public class AdvancedExportService {
     }
 
     /**
-     * 构建description: <p>参数名:参数值</p>格式
+     * 构建description: <p>参数名 : 参数值</p>格式
+     * 从parametersText字段解析参数（格式："参数1:值1 参数2:值2 ..."）
      */
     private String buildDescription(Product product) {
-        // 这里简化处理，实际可能需要从JSON参数中解析
         StringBuilder desc = new StringBuilder();
+
+        // 如果有parametersText字段，解析并转换为HTML格式
         if (product.getParametersText() != null && !product.getParametersText().isEmpty()) {
-            desc.append("<p>产品参数 : ").append(product.getParametersText()).append("</p>");
+            String paramsText = product.getParametersText().trim();
+
+            // parametersText格式："参数1:值1 参数2:值2 ..."
+            // 按空格分割每个参数
+            String[] params = paramsText.split("\\s+");
+
+            for (String param : params) {
+                // 每个参数按冒号分割为名称和值
+                int colonIndex = param.indexOf(':');
+                if (colonIndex > 0 && colonIndex < param.length() - 1) {
+                    String paramName = param.substring(0, colonIndex).trim();
+                    String paramValue = param.substring(colonIndex + 1).trim();
+
+                    if (!paramName.isEmpty() && !paramValue.isEmpty()) {
+                        desc.append("<p>").append(paramName).append("  :  ").append(paramValue).append("</p>");
+                    }
+                }
+            }
         }
+
         return desc.toString();
     }
 

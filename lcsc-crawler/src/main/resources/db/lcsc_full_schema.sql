@@ -216,3 +216,9 @@ CREATE TABLE `task_logs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='任务日志表';
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- 为shops表添加seller_category_id字段
+-- 用于淘宝CSV导出时的店铺分类码
+
+ALTER TABLE `shops`
+    ADD COLUMN `seller_category_id` VARCHAR(100) NULL COMMENT '店铺分类码（用于淘宝导出）' AFTER `shipping_template_id`;
